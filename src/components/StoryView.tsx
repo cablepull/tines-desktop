@@ -295,13 +295,6 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
         <div style={{ display: 'flex', gap: '2rem', alignItems: 'flex-start', flex: 1, minHeight: '600px' }}>
           
         {/* Actions Canvas Plane */}
-        <div style={{ position: 'absolute', top: 120, right: 350, zIndex: 999999, background: 'rgba(255,0,0,0.8)', padding: '1rem', color: '#fff', borderRadius: '4px', fontFamily: 'monospace', fontWeight: 'bold' }}>
-           <div style={{ fontSize: '1.2rem', marginBottom: '0.5rem' }}>UI RENDER ENGINE:</div>
-           <div>Actions in State: {actions.length}</div>
-           <div>React Pan Vector X: {Math.round(pan.x)}, Y: {Math.round(pan.y)}</div>
-           <div>Current Topology Zoom: {Math.round(zoom * 100)}%</div>
-           <button onClick={() => setPan({x:0, y:0})} style={{ marginTop: '0.5rem', background: '#000', color: '#fff', padding: '4px 8px', border: '1px solid white', cursor: 'pointer' }}>Force Reset Pan 0,0</button>
-        </div>
         <div 
           style={{ 
             flex: 2, position: 'relative', overflow: 'hidden', 

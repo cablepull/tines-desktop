@@ -13,14 +13,17 @@ interface NodeInspectorProps {
 export default function NodeInspector({ action, tenant, apiKey, onClose }: NodeInspectorProps) {
   const { addLog } = useLogger();
   const [running, setRunning] = useState(false);
+  const [eventResult, setEventResult] = useState<any>(null);
+  const [activeTab, setActiveTab] = useState<'config' | 'events'>('config');
 
   const executeLiveRun = async () => {
     setRunning(true);
-    addLog('NETWORK', `Initating Live Execution test for Action: ${action.name}`);
+    setEventResult(null);
+    addLog('NETWORK', `Initiating Live Execution test for Action: ${action.name}`);
     const baseUrl = tenant.startsWith('http') ? tenant : `https://${tenant}`;
     
     try {
-      // Tines typically maps runs via REST to /run or /dry_run. We will trial /run first.
+      // Tines maps runs via REST to /run or /dry_run. We trial /run first.
       const res = await fetch(`${baseUrl}/api/v1/actions/${action.id}/run`, {
         method: 'POST',
         headers: {
@@ -39,16 +42,43 @@ export default function NodeInspector({ action, tenant, apiKey, onClose }: NodeI
         });
         if (!fallback.ok) throw new Error(`Dry Run fallback failed with ${fallback.status}`);
         const fallbackData = await fallback.json();
+        setEventResult(fallbackData);
+        setActiveTab('events');
         addLog('SUCCESS', `Dry Run Success!`, fallbackData);
         return;
       }
       
       const data = await res.json();
+      setEventResult(data);
+      setActiveTab('events');
       addLog('SUCCESS', `Action Executed Successfully!`, data);
     } catch (err: any) {
+      setEventResult({ error: err.message });
+      setActiveTab('events');
       addLog('ERROR', `Execution flow failed`, { error: err.message });
     } finally {
       setRunning(false);
+    }
+  };
+
+  const fetchLatestEvents = async () => {
+    const baseUrl = tenant.startsWith('http') ? tenant : `https://${tenant}`;
+    addLog('NETWORK', `Fetching latest events for Action ${action.id}...`);
+    try {
+      const res = await fetch(`${baseUrl}/api/v1/actions/${action.id}/events?per_page=5`, {
+        headers: { 'Authorization': `Bearer ${apiKey}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const events = data.events || data.agents_events || (Array.isArray(data) ? data : []);
+        setEventResult({ latestEvents: events, count: events.length });
+        setActiveTab('events');
+        addLog('SUCCESS', `Retrieved ${events.length} recent events.`);
+      } else {
+        addLog('WARNING', `Events endpoint returned ${res.status}`);
+      }
+    } catch (err: any) {
+      addLog('ERROR', `Failed to fetch events`, { error: err.message });
     }
   };
 
@@ -66,28 +96,95 @@ export default function NodeInspector({ action, tenant, apiKey, onClose }: NodeI
         <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
       </div>
       
+      {/* Tab Switcher */}
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
+        <button 
+          onClick={() => setActiveTab('config')} 
+          className={activeTab === 'config' ? 'btn-primary' : 'btn-glass'}
+          style={{ padding: '0.4rem 1rem', fontSize: '0.85rem' }}
+        >
+          Configuration
+        </button>
+        <button 
+          onClick={() => { setActiveTab('events'); if (!eventResult) fetchLatestEvents(); }}
+          className={activeTab === 'events' ? 'btn-primary' : 'btn-glass'}
+          style={{ padding: '0.4rem 1rem', fontSize: '0.85rem' }}
+        >
+          Event Inspector
+        </button>
+      </div>
+
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        <div style={{ marginBottom: '1.5rem' }}>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600, letterSpacing: '0.5px' }}>AGENT TYPOLOGY</span>
-          <div style={{ color: 'var(--accent-hover)', marginTop: '0.25rem', fontFamily: 'monospace' }}>{action.type?.replace('Agents::', '')}</div>
-        </div>
+        {activeTab === 'config' ? (
+          <>
+            <div style={{ marginBottom: '1.5rem' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600, letterSpacing: '0.5px' }}>AGENT TYPOLOGY</span>
+              <div style={{ color: 'var(--accent-hover)', marginTop: '0.25rem', fontFamily: 'monospace' }}>{typeof action.type === 'string' ? action.type.replace('Agents::', '') : 'Unknown'}</div>
+            </div>
 
-        <div style={{ marginBottom: '1rem' }}>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600, letterSpacing: '0.5px' }}>PAYLOAD CONFIGURATION</span>
-          <pre style={{
-            background: 'rgba(0,0,0,0.5)', padding: '1rem', borderRadius: '8px',
-            fontSize: '0.8rem', color: '#a5d6ff', marginTop: '0.5rem', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-            border: '1px solid var(--glass-border)'
-          }}>
-            {JSON.stringify(action.options || {}, null, 2)}
-          </pre>
-        </div>
+            <div style={{ marginBottom: '1rem' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600, letterSpacing: '0.5px' }}>PAYLOAD CONFIGURATION</span>
+              <pre style={{
+                background: 'rgba(0,0,0,0.5)', padding: '1rem', borderRadius: '8px',
+                fontSize: '0.8rem', color: '#a5d6ff', marginTop: '0.5rem', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                border: '1px solid var(--glass-border)'
+              }}>
+                {JSON.stringify(action.options || {}, null, 2)}
+              </pre>
+            </div>
 
-        <div style={{ marginTop: '2rem' }}>
-          <button onClick={executeLiveRun} disabled={running} className="btn-primary" style={{ width: '100%', padding: '0.75rem', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem', background: running ? 'var(--bg-glass)' : 'var(--accent-color)' }}>
-            <span>▷</span> {running ? 'Executing...' : 'Execute Live Run'}
-          </button>
-        </div>
+            <div style={{ marginBottom: '1rem' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600, letterSpacing: '0.5px' }}>CONNECTIONS</span>
+              <div style={{ marginTop: '0.5rem', fontSize: '0.85rem' }}>
+                <div style={{ color: 'var(--text-secondary)' }}>
+                  Sources: {Array.isArray(action.sources) ? action.sources.join(', ') : 'None'}
+                </div>
+                <div style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+                  Receivers: {Array.isArray((action as any).receivers) ? (action as any).receivers.join(', ') : 'None'}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '1rem' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600, letterSpacing: '0.5px' }}>METADATA</span>
+              <div style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                <div>ID: {action.id}</div>
+                <div>Story: {(action as any).story_id || (action as any).storyId}</div>
+                <div>Position: ({action.position?.x}, {action.position?.y})</div>
+                <div>GUID: {(action as any).guid || 'N/A'}</div>
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ marginBottom: '1rem' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600, letterSpacing: '0.5px' }}>EVENT PAYLOAD INSPECTOR</span>
+              <button onClick={fetchLatestEvents} className="btn-glass" style={{ marginLeft: '1rem', padding: '2px 8px', fontSize: '0.75rem' }}>
+                ↻ Refresh
+              </button>
+            </div>
+
+            {eventResult ? (
+              <pre style={{
+                background: 'rgba(0,0,0,0.5)', padding: '1rem', borderRadius: '8px',
+                fontSize: '0.75rem', color: '#a5d6ff', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                border: '1px solid var(--glass-border)', maxHeight: '400px', overflowY: 'auto'
+              }}>
+                {JSON.stringify(eventResult, null, 2)}
+              </pre>
+            ) : (
+              <div style={{ color: 'var(--text-secondary)', fontStyle: 'italic', fontSize: '0.85rem' }}>
+                No event data yet. Execute a Live Run or click Refresh to load recent events.
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem' }}>
+        <button onClick={executeLiveRun} disabled={running} className="btn-primary" style={{ flex: 1, padding: '0.75rem', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem', background: running ? 'var(--bg-glass)' : 'var(--accent-color)' }}>
+          <span>▷</span> {running ? 'Executing...' : 'Execute Live Run'}
+        </button>
       </div>
     </div>
   );
