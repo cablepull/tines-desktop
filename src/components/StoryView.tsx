@@ -67,6 +67,25 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
   const [customLabels, setCustomLabels] = useState<Record<number, string>>({});
   const [tierOverrides, setTierOverrides] = useState<Record<number, SafetyTier>>({});
 
+  // Board Comments / Annotations
+  interface BoardNote { id: number; x: number; y: number; text: string; color: string; }
+  const [notes, setNotes] = useState<BoardNote[]>([]);
+  const [nextNoteId, setNextNoteId] = useState(1);
+  const [editingNoteId, setEditingNoteId] = useState<number | null>(null);
+  const [draggedNoteId, setDraggedNoteId] = useState<number | null>(null);
+  const [noteDragOffset, setNoteDragOffset] = useState({ x: 0, y: 0 });
+
+  const addNote = () => {
+    const containerW = canvasRef.current?.clientWidth || 800;
+    const containerH = canvasRef.current?.clientHeight || 600;
+    // Place the note in the center of the current viewport
+    const cx = (-pan.x + containerW / 2) / zoom;
+    const cy = (-pan.y + containerH / 2) / zoom;
+    setNotes(prev => [...prev, { id: nextNoteId, x: cx - 90, y: cy - 40, text: 'New note...', color: '#fbbf24' }]);
+    setNextNoteId(n => n + 1);
+    addLog('INFO', `Added board note #${nextNoteId}`);
+  };
+
   // Resolve safety with overrides applied
   const getEffectiveSafety = (act: any): SafetyInfo => {
     const override = tierOverrides[act.id];
@@ -100,6 +119,15 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
+    // Note dragging
+    if (draggedNoteId !== null) {
+      if (e.buttons !== 1) { setDraggedNoteId(null); return; }
+      const nx = e.clientX / zoom - noteDragOffset.x;
+      const ny = e.clientY / zoom - noteDragOffset.y;
+      setNotes(prev => prev.map(n => n.id === draggedNoteId ? { ...n, x: nx, y: ny } : n));
+      return;
+    }
+
     if (draggedNode) {
       if (e.buttons !== 1) { handleGlobalMouseUp(); return; }
       const tempActions = [...actions];
@@ -141,9 +169,9 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
 
   const handleGlobalMouseUp = () => {
     setIsDragging(false);
+    if (draggedNoteId !== null) { setDraggedNoteId(null); }
     if (draggedNode) {
        syncNodeCoordinates(draggedNode);
-       // If mouse didn't move far from start offset, treat it as a click
        setDraggedNode(null);
     }
   };
@@ -402,6 +430,7 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
         >
           {/* Zoom Overlay HUD */}
           <div style={{ position: 'absolute', bottom: '20px', right: '20px', zIndex: 1000, display: 'flex', gap: '0.5rem', background: 'var(--bg-card)', padding: '0.5rem', borderRadius: '8px', border: '1px solid var(--glass-border)', boxShadow: '0 4px 12px rgba(0,0,0,0.5)' }}>
+            <button className="btn-glass" onClick={addNote} style={{ padding: '4px 12px', color: '#fbbf24' }} title="Add sticky note">📝 {notes.length > 0 ? notes.length : ''}</button>
             <button className="btn-glass" onClick={() => setZoom(z => Math.max(z - 0.2, 0.1))} style={{ padding: '4px 12px' }}>−</button>
             <button className="btn-glass" onClick={() => setZoom(1)} style={{ padding: '4px 12px', minWidth: '60px' }}>{Math.round(zoom * 100)}%</button>
             <button className="btn-glass" onClick={() => setZoom(z => Math.min(z + 0.2, 2.5))} style={{ padding: '4px 12px' }}>+</button>
@@ -515,7 +544,63 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
                 )}
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.5rem', pointerEvents: 'none' }}>ID: {act.id}</div>
               </div>
-            )})};
+            )})}
+
+            {/* Board Notes / Comments */}
+            {notes.map(note => (
+              <div
+                key={`note-${note.id}`}
+                className="nondraggable"
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  setDraggedNoteId(note.id);
+                  setNoteDragOffset({ x: e.clientX / zoom - note.x, y: e.clientY / zoom - note.y });
+                }}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  setEditingNoteId(note.id);
+                }}
+                style={{
+                  position: 'absolute',
+                  left: note.x,
+                  top: note.y,
+                  width: '180px',
+                  minHeight: '80px',
+                  background: `${note.color}dd`,
+                  borderRadius: '4px',
+                  padding: '0.75rem',
+                  boxShadow: draggedNoteId === note.id ? '0 12px 36px rgba(0,0,0,0.5)' : '0 4px 12px rgba(0,0,0,0.3)',
+                  cursor: draggedNoteId === note.id ? 'grabbing' : 'grab',
+                  zIndex: draggedNoteId === note.id ? 60 : 5,
+                  userSelect: 'none',
+                  transition: draggedNoteId === note.id ? 'none' : 'box-shadow 0.2s ease',
+                  fontFamily: "'Georgia', serif",
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                  <span style={{ fontSize: '0.65rem', color: 'rgba(0,0,0,0.4)', fontWeight: 600 }}>📌 NOTE</span>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setNotes(prev => prev.filter(n => n.id !== note.id)); }}
+                    style={{ background: 'transparent', border: 'none', color: 'rgba(0,0,0,0.3)', cursor: 'pointer', fontSize: '1rem', padding: 0, pointerEvents: 'auto', lineHeight: 1 }}
+                    title="Delete note"
+                  >×</button>
+                </div>
+                {editingNoteId === note.id ? (
+                  <textarea
+                    autoFocus
+                    value={note.text}
+                    onChange={(e) => setNotes(prev => prev.map(n => n.id === note.id ? { ...n, text: e.target.value } : n))}
+                    onBlur={() => setEditingNoteId(null)}
+                    onKeyDown={(e) => { if (e.key === 'Escape') setEditingNoteId(null); }}
+                    style={{ width: '100%', minHeight: '50px', background: 'transparent', border: 'none', color: 'rgba(0,0,0,0.8)', fontSize: '0.8rem', resize: 'vertical', outline: 'none', fontFamily: "'Georgia', serif" }}
+                  />
+                ) : (
+                  <div style={{ fontSize: '0.8rem', color: 'rgba(0,0,0,0.8)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                    {note.text}
+                  </div>
+                )}
+              </div>
+            ))};
 
             {/* Safety Map Legend */}
             {viewMode === 'safety' && (
