@@ -4,6 +4,7 @@ import { Configuration, ActionsApi } from 'tines-sdk';
 import type { Action } from 'tines-sdk';
 import { useLogger } from '../context/LogContext';
 import NodeInspector from './NodeInspector';
+import { jsPDF } from 'jspdf';
 
 // Phase 11: Safety Classification Engine
 type SafetyTier = 'safe' | 'read-only' | 'interactive' | 'mutating';
@@ -66,6 +67,7 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
   const canvasRef = useRef<HTMLDivElement>(null);
   const [customLabels, setCustomLabels] = useState<Record<number, string>>({});
   const [tierOverrides, setTierOverrides] = useState<Record<number, SafetyTier>>({});
+  const [showGrid, setShowGrid] = useState(false);
 
   // Board Comments / Annotations
   interface BoardNote { id: number; x: number; y: number; text: string; color: string; }
@@ -292,6 +294,267 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
     addLog('INFO', `Centered ${actions.length} nodes (zoom: ${Math.round(newZoom*100)}%)`);
   };
 
+  // Phase 13: Topological Auto-Layout (de-overlap)
+  const NODE_W = 240, NODE_H = 120, GAP_X = 60, GAP_Y = 50;
+  const autoLayout = () => {
+    if (actions.length === 0) return;
+    // Build adjacency: find depth of each node via BFS from roots
+    const childMap = new Map<number, number[]>();
+    const parentSet = new Set<number>();
+    actions.forEach(a => {
+      if (Array.isArray(a.sources)) {
+        a.sources.forEach((sid: any) => {
+          parentSet.add(sid);
+          childMap.set(sid, [...(childMap.get(sid) || []), a.id!]);
+        });
+      }
+    });
+    const roots = actions.filter(a => !a.sources || (a.sources as any[]).length === 0).map(a => a.id!);
+    if (roots.length === 0) roots.push(actions[0].id!);
+
+    const depth = new Map<number, number>();
+    const queue = [...roots];
+    roots.forEach(r => depth.set(r, 0));
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+      const children = childMap.get(cur) || [];
+      children.forEach(c => {
+        if (!depth.has(c)) {
+          depth.set(c, (depth.get(cur) || 0) + 1);
+          queue.push(c);
+        }
+      });
+    }
+    // Assign unvisited nodes to max depth + 1
+    const maxDepth = Math.max(...Array.from(depth.values()), 0);
+    actions.forEach(a => { if (!depth.has(a.id!)) depth.set(a.id!, maxDepth + 1); });
+
+    // Group by depth row
+    const rows = new Map<number, number[]>();
+    actions.forEach(a => {
+      const d = depth.get(a.id!) || 0;
+      rows.set(d, [...(rows.get(d) || []), a.id!]);
+    });
+
+    // Position: each row top-to-bottom, nodes left-to-right within row
+    const newActions = [...actions];
+    const sortedRows = Array.from(rows.keys()).sort((a, b) => a - b);
+    sortedRows.forEach((rowIdx, ri) => {
+      const ids = rows.get(rowIdx)!;
+      const rowWidth = ids.length * (NODE_W + GAP_X) - GAP_X;
+      const startX = -rowWidth / 2;
+      ids.forEach((id, ci) => {
+        const idx = newActions.findIndex(a => a.id === id);
+        if (idx >= 0) {
+          newActions[idx] = { ...newActions[idx], position: { x: startX + ci * (NODE_W + GAP_X), y: ri * (NODE_H + GAP_Y) } };
+        }
+      });
+    });
+    setActions(newActions);
+    addLog('SUCCESS', `Auto-layout: ${sortedRows.length} rows, ${actions.length} nodes repositioned`);
+    setTimeout(recenterCanvas, 50);
+  };
+
+  // Phase 13: Grid overlay computation
+  const getGridInfo = () => {
+    if (actions.length === 0) return { cells: [], cols: 0, rows: 0, minX: 0, minY: 0, cellW: 0, cellH: 0 };
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    actions.forEach((a: any) => {
+      const ax = a.position?.x || 0;
+      const ay = a.position?.y || 0;
+      if (ax < minX) minX = ax;
+      if (ay < minY) minY = ay;
+      if (ax + NODE_W > maxX) maxX = ax + NODE_W;
+      if (ay + NODE_H > maxY) maxY = ay + NODE_H;
+    });
+    const pad = 40;
+    minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+    // Each cell should be ~600x400 (readable at ~80% zoom on letter paper)
+    const cellW = 600, cellH = 450;
+    const cols = Math.max(1, Math.ceil((maxX - minX) / cellW));
+    const rows = Math.max(1, Math.ceil((maxY - minY) / cellH));
+    const cells: { label: string; x: number; y: number; w: number; h: number; page: number }[] = [];
+    let page = 2; // page 1 is overview
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        cells.push({ label: `${r+1}-${c+1}`, x: minX + c * cellW, y: minY + r * cellH, w: cellW, h: cellH, page: page++ });
+      }
+    }
+    return { cells, cols, rows, minX, minY, cellW, cellH };
+  };
+
+  // Phase 13: SVG Export
+  const exportSVG = () => {
+    if (actions.length === 0) return;
+    const grid = getGridInfo();
+    const pad = 60;
+    let gMinX = Infinity, gMinY = Infinity, gMaxX = -Infinity, gMaxY = -Infinity;
+    actions.forEach((a: any) => {
+      gMinX = Math.min(gMinX, a.position?.x || 0);
+      gMinY = Math.min(gMinY, a.position?.y || 0);
+      gMaxX = Math.max(gMaxX, (a.position?.x || 0) + NODE_W);
+      gMaxY = Math.max(gMaxY, (a.position?.y || 0) + NODE_H);
+    });
+    const svgW = gMaxX - gMinX + pad * 2;
+    const svgH = gMaxY - gMinY + pad * 2;
+    const isSafety = viewMode === 'safety';
+    let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgW}" height="${svgH}" viewBox="${gMinX - pad} ${gMinY - pad} ${svgW} ${svgH}" style="background:#0f172a;font-family:system-ui,sans-serif">`;
+    // Links
+    actions.forEach(act => {
+      if (!act.sources || !Array.isArray(act.sources)) return;
+      act.sources.forEach((sid: any) => {
+        const src = actions.find(a => a.id === sid);
+        if (!src) return;
+        const x1 = (src.position?.x || 0) + NODE_W/2, y1 = (src.position?.y || 0) + NODE_H;
+        const x2 = (act.position?.x || 0) + NODE_W/2, y2 = act.position?.y || 0;
+        const yM = y1 + (y2 - y1) / 2;
+        const color = isSafety ? getEffectiveSafety(act).color : '#334155';
+        svg += `<path d="M${x1} ${y1} C${x1} ${yM},${x2} ${yM},${x2} ${y2}" fill="none" stroke="${color}" stroke-width="2.5" opacity="0.7"/>`;
+      });
+    });
+    // Nodes
+    actions.forEach(act => {
+      const x = act.position?.x || 0, y = act.position?.y || 0;
+      const safety = getEffectiveSafety(act);
+      const fill = isSafety ? safety.bgColor : 'rgba(30,41,59,0.9)';
+      const border = isSafety ? safety.color : ((act.type === 'Agents::WebhookAgent' || act.type === 'Agents::TriggerAgent') ? '#22c55e' : '#6366f1');
+      svg += `<rect x="${x}" y="${y}" width="${NODE_W}" height="${NODE_H - 20}" rx="10" fill="${fill}" stroke="${border}" stroke-width="2"/>`;
+      svg += `<text x="${x + 12}" y="${y + 28}" fill="white" font-size="13" font-weight="600">${(act.name || 'Unnamed').substring(0, 28)}</text>`;
+      svg += `<text x="${x + 12}" y="${y + 48}" fill="${isSafety ? safety.color : '#94a3b8'}" font-size="10">${(act.type || '').replace('Agents::','')}</text>`;
+      if (isSafety) {
+        svg += `<text x="${x + 12}" y="${y + 68}" fill="${safety.color}" font-size="11">${safety.icon} ${safety.label}</text>`;
+      }
+    });
+    // Grid overlay
+    if (showGrid) {
+      grid.cells.forEach(c => {
+        svg += `<rect x="${c.x}" y="${c.y}" width="${c.w}" height="${c.h}" fill="none" stroke="#475569" stroke-width="1" stroke-dasharray="8,4" opacity="0.5"/>`;
+        svg += `<text x="${c.x + 8}" y="${c.y + 20}" fill="#64748b" font-size="14" font-weight="bold">${c.label}</text>`;
+      });
+    }
+    svg += '</svg>';
+    const blob = new Blob([svg], { type: 'image/svg+xml' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `tines-story-${storyId}${isSafety ? '-safety' : ''}.svg`;
+    a.click();
+    addLog('SUCCESS', `Exported SVG (${Math.round(svgW)}x${Math.round(svgH)})`);
+  };
+
+  // Phase 13: Multi-Page PDF Export
+  const exportPDF = () => {
+    if (actions.length === 0) return;
+    const grid = getGridInfo();
+    const isSafety = viewMode === 'safety';
+    const pdf = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
+    const pw = pdf.internal.pageSize.getWidth();
+    const ph = pdf.internal.pageSize.getHeight();
+
+    // Helper: render graph region to a PDF page
+    const renderRegion = (regionX: number, regionY: number, regionW: number, regionH: number, pageLabel: string) => {
+      pdf.setFillColor(15, 23, 42);
+      pdf.rect(0, 0, pw, ph, 'F');
+      const scale = Math.min(pw / regionW, ph / regionH) * 0.9;
+      const offX = (pw - regionW * scale) / 2 - regionX * scale;
+      const offY = (ph - regionH * scale) / 2 - regionY * scale;
+
+      // Links
+      actions.forEach(act => {
+        if (!act.sources || !Array.isArray(act.sources)) return;
+        act.sources.forEach((sid: any) => {
+          const src = actions.find(a => a.id === sid);
+          if (!src) return;
+          const x1 = ((src.position?.x || 0) + NODE_W/2) * scale + offX;
+          const y1 = ((src.position?.y || 0) + NODE_H) * scale + offY;
+          const x2 = ((act.position?.x || 0) + NODE_W/2) * scale + offX;
+          const y2 = (act.position?.y || 0) * scale + offY;
+          const color = isSafety ? getEffectiveSafety(act).color : '#475569';
+          pdf.setDrawColor(color);
+          pdf.setLineWidth(1.5);
+          pdf.line(x1, y1, x2, y2);
+        });
+      });
+
+      // Nodes
+      actions.forEach(act => {
+        const nx = (act.position?.x || 0) * scale + offX;
+        const ny = (act.position?.y || 0) * scale + offY;
+        const nw = NODE_W * scale;
+        const nh = (NODE_H - 20) * scale;
+        // Only render nodes within visible region (with padding)
+        if (nx + nw < -50 || nx > pw + 50 || ny + nh < -50 || ny > ph + 50) return;
+        const safety = getEffectiveSafety(act);
+        const borderColor = isSafety ? safety.color : ((act.type === 'Agents::WebhookAgent' || act.type === 'Agents::TriggerAgent') ? '#22c55e' : '#6366f1');
+        pdf.setFillColor(30, 41, 59);
+        pdf.roundedRect(nx, ny, nw, nh, 4, 4, 'F');
+        pdf.setDrawColor(borderColor);
+        pdf.setLineWidth(2);
+        pdf.roundedRect(nx, ny, nw, nh, 4, 4, 'S');
+        pdf.setFontSize(Math.max(8, 11 * scale));
+        pdf.setTextColor(255, 255, 255);
+        pdf.text((act.name || 'Unnamed').substring(0, 30), nx + 8 * scale, ny + 20 * scale);
+        pdf.setFontSize(Math.max(6, 8 * scale));
+        pdf.setTextColor(isSafety ? safety.color : '#94a3b8');
+        pdf.text((act.type || '').replace('Agents::', ''), nx + 8 * scale, ny + 36 * scale);
+        if (isSafety) {
+          pdf.setTextColor(safety.color);
+          pdf.text(`${safety.label}`, nx + 8 * scale, ny + 50 * scale);
+        }
+      });
+
+      // Page label
+      pdf.setFontSize(10);
+      pdf.setTextColor(100, 116, 139);
+      pdf.text(pageLabel, 20, ph - 15);
+      pdf.text(`Tines Story ${storyId} | ${isSafety ? 'Safety Map' : 'Visual Canvas'}`, pw - 250, ph - 15);
+    };
+
+    // Page 1: Overview with grid numbers
+    let oMinX = Infinity, oMinY = Infinity, oMaxX = -Infinity, oMaxY = -Infinity;
+    actions.forEach((a: any) => {
+      oMinX = Math.min(oMinX, a.position?.x || 0);
+      oMinY = Math.min(oMinY, a.position?.y || 0);
+      oMaxX = Math.max(oMaxX, (a.position?.x || 0) + NODE_W);
+      oMaxY = Math.max(oMaxY, (a.position?.y || 0) + NODE_H);
+    });
+    const padO = 80;
+    renderRegion(oMinX - padO, oMinY - padO, oMaxX - oMinX + padO * 2, oMaxY - oMinY + padO * 2, 'Page 1 — Overview');
+
+    // Draw grid overlay on overview
+    const overScale = Math.min(pw / (oMaxX - oMinX + padO * 2), ph / (oMaxY - oMinY + padO * 2)) * 0.9;
+    const overOffX = (pw - (oMaxX - oMinX + padO * 2) * overScale) / 2 - (oMinX - padO) * overScale;
+    const overOffY = (ph - (oMaxY - oMinY + padO * 2) * overScale) / 2 - (oMinY - padO) * overScale;
+    grid.cells.forEach(cell => {
+      const cx = cell.x * overScale + overOffX;
+      const cy = cell.y * overScale + overOffY;
+      const cw = cell.w * overScale;
+      const ch = cell.h * overScale;
+      pdf.setDrawColor('#64748b');
+      pdf.setLineWidth(0.5);
+      pdf.setLineDashPattern([4, 3], 0);
+      pdf.rect(cx, cy, cw, ch, 'S');
+      pdf.setLineDashPattern([], 0);
+      pdf.setFontSize(12);
+      pdf.setTextColor('#94a3b8');
+      pdf.text(`P${cell.page}`, cx + 4, cy + 14);
+    });
+
+    // Detail pages
+    grid.cells.forEach(cell => {
+      pdf.addPage();
+      renderRegion(cell.x, cell.y, cell.w, cell.h, `Page ${cell.page} — Section ${cell.label}`);
+      // Section number badge
+      pdf.setFillColor(71, 85, 105);
+      pdf.roundedRect(pw - 60, 15, 45, 22, 4, 4, 'F');
+      pdf.setFontSize(12);
+      pdf.setTextColor(255, 255, 255);
+      pdf.text(cell.label, pw - 52, 31);
+    });
+
+    pdf.save(`tines-story-${storyId}${isSafety ? '-safety' : ''}.pdf`);
+    addLog('SUCCESS', `Exported ${1 + grid.cells.length}-page PDF`);
+  };
+
   useEffect(() => {
     if (actions.length > 0 && pan.x === 0 && pan.y === 0) {
       // Small delay to ensure canvas ref is mounted
@@ -430,6 +693,11 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
         >
           {/* Zoom Overlay HUD */}
           <div style={{ position: 'absolute', bottom: '20px', right: '20px', zIndex: 1000, display: 'flex', gap: '0.5rem', background: 'var(--bg-card)', padding: '0.5rem', borderRadius: '8px', border: '1px solid var(--glass-border)', boxShadow: '0 4px 12px rgba(0,0,0,0.5)' }}>
+            <button className="btn-glass" onClick={autoLayout} style={{ padding: '4px 12px' }} title="Auto-layout nodes">✨</button>
+            <button className="btn-glass" onClick={() => setShowGrid(g => !g)} style={{ padding: '4px 12px', color: showGrid ? '#3b82f6' : undefined }} title="Toggle grid overlay">▦</button>
+            <button className="btn-glass" onClick={exportSVG} style={{ padding: '4px 12px' }} title="Export SVG">SVG</button>
+            <button className="btn-glass" onClick={exportPDF} style={{ padding: '4px 12px' }} title="Export PDF">PDF</button>
+            <span style={{ width: '1px', background: 'var(--glass-border)' }} />
             <button className="btn-glass" onClick={addNote} style={{ padding: '4px 12px', color: '#fbbf24' }} title="Add sticky note">📝 {notes.length > 0 ? notes.length : ''}</button>
             <button className="btn-glass" onClick={() => setZoom(z => Math.max(z - 0.2, 0.1))} style={{ padding: '4px 12px' }}>−</button>
             <button className="btn-glass" onClick={() => setZoom(1)} style={{ padding: '4px 12px', minWidth: '60px' }}>{Math.round(zoom * 100)}%</button>
@@ -601,6 +869,26 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
                 )}
               </div>
             ))};
+
+            {/* Numbered Grid Overlay */}
+            {showGrid && actions.length > 0 && (() => {
+              const grid = getGridInfo();
+              return grid.cells.map(cell => (
+                <div key={`grid-${cell.label}`} style={{
+                  position: 'absolute', left: cell.x, top: cell.y, width: cell.w, height: cell.h,
+                  border: '1.5px dashed rgba(71, 85, 105, 0.5)',
+                  pointerEvents: 'none', zIndex: 1
+                }}>
+                  <div style={{
+                    position: 'absolute', top: 4, left: 6,
+                    background: 'rgba(30, 41, 59, 0.85)', padding: '2px 8px', borderRadius: '4px',
+                    fontSize: '0.75rem', fontWeight: 700, color: '#94a3b8', letterSpacing: '0.5px'
+                  }}>
+                    P{cell.page} · {cell.label}
+                  </div>
+                </div>
+              ));
+            })()}
 
             {/* Safety Map Legend */}
             {viewMode === 'safety' && (
