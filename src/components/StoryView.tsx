@@ -5,6 +5,7 @@ import type { Action } from 'tines-sdk';
 import { useLogger } from '../context/LogContext';
 import NodeInspector from './NodeInspector';
 import { jsPDF } from 'jspdf';
+import { usePerformanceMonitor } from '../utils/usePerformanceMonitor';
 
 // Phase 11: Safety Classification Engine
 type SafetyTier = 'safe' | 'read-only' | 'interactive' | 'mutating';
@@ -56,6 +57,7 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
   const [actions, setActions] = useState<Action[]>([]);
   const [loading, setLoading] = useState(true);
   const { addLog } = useLogger();
+  const { startMeasure, endMeasure } = usePerformanceMonitor('StoryView');
 
   // Create Action State
   const [actionName, setActionName] = useState('');
@@ -222,6 +224,7 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
   }, [tenant, apiKey]);
 
   const fetchActions = async () => {
+    startMeasure('StoryLoad');
     try {
       setLoading(true);
       const basePath = tenant.startsWith('http') ? tenant : `https://${tenant}`;
@@ -255,6 +258,9 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
       if (!rawActions) rawActions = [];
 
       setActions(rawActions);
+      const metrics = endMeasure('StoryLoad');
+      if (metrics) addLog('DEBUG', `Story Load Time: ${metrics.duration.toFixed(2)}ms`);
+
       if (rawActions.length === 0) {
          addLog('WARNING', `All environments yielded 0 actions! The Story is genuinely empty or access is fundamentally restricted.`);
       }
@@ -272,10 +278,11 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
   }, [actionsApi, storyId]);
 
   // Viewport Auto-Centering: Calculate bounding box center and offset to canvas center
-  const recenterCanvas = () => {
-    if (actions.length === 0) return;
+  const recenterCanvas = (targetActions = actions) => {
+    startMeasure('AutoLayout');
+    if (targetActions.length === 0) return;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    actions.forEach((a: any) => {
+    targetActions.forEach((a: any) => {
       const ax = a.position?.x || 0;
       const ay = a.position?.y || 0;
       if (ax < minX) minX = ax;
@@ -295,7 +302,9 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
     const offsetY = (containerH / newZoom - graphH) / 2 - minY;
     setZoom(newZoom);
     setPan({ x: offsetX * newZoom, y: offsetY * newZoom });
-    addLog('INFO', `Centered ${actions.length} nodes (zoom: ${Math.round(newZoom*100)}%)`);
+    const metrics = endMeasure('AutoLayout');
+    if (metrics) addLog('DEBUG', `Auto-Layout Latency: ${metrics.duration.toFixed(2)}ms`);
+    addLog('INFO', `Centered ${targetActions.length} nodes (zoom: ${Math.round(newZoom*100)}%)`);
   };
 
   // Fly-to-node: pan + zoom to center a specific node
@@ -307,8 +316,8 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
     const targetZoom = 1.2;
     const nx = act.position?.x || 0;
     const ny = act.position?.y || 0;
-    const offsetX = containerW / 2 - (nx + NODE_W / 2) * targetZoom;
-    const offsetY = containerH / 2 - (ny + NODE_H / 2) * targetZoom;
+    const offsetX = containerW / 2 - (nx + 240 / 2) * targetZoom;
+    const offsetY = containerH / 2 - (ny + 120 / 2) * targetZoom;
     setZoom(targetZoom);
     setPan({ x: offsetX, y: offsetY });
     setHighlightedNodeId(actionId);
@@ -684,7 +693,7 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
         </button>
         {(viewMode === 'canvas' || viewMode === 'safety') && actions.length > 0 && (
            <button 
-             onClick={recenterCanvas} 
+             onClick={() => recenterCanvas()} 
              className="btn-glass" 
              style={{ marginLeft: 'auto', background: 'rgba(16, 185, 129, 0.1)', color: 'var(--success-color)', border: '1px solid var(--success-color)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
              ⌖ Focus Canvas Over Nodes

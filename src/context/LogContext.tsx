@@ -2,7 +2,7 @@
 import { createContext, useContext, useState, useCallback } from 'react';
 import type { ReactNode } from 'react';
 
-export type LogLevel = 'INFO' | 'ERROR' | 'NETWORK' | 'SUCCESS' | 'WARNING';
+export type LogLevel = 'INFO' | 'ERROR' | 'NETWORK' | 'SUCCESS' | 'WARNING' | 'DEBUG';
 
 export interface LogEntry {
   id: string;

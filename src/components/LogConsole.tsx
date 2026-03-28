@@ -3,11 +3,12 @@ import { useLogger } from '../context/LogContext';
 import type { LogLevel } from '../context/LogContext';
 
 const LevelColors: Record<LogLevel, string> = {
-  INFO: '#3B82F6',     // Blue
-  NETWORK: '#8B5CF6',  // Purple
-  SUCCESS: '#10B981',  // Green
-  ERROR: '#EF4444',    // Red
-  WARNING: '#F59E0B'   // Amber
+  INFO: '#3B82F6',
+  NETWORK: '#8B5CF6',
+  SUCCESS: '#10b981',
+  ERROR: '#EF4444',
+  WARNING: '#f59e0b',
+  DEBUG: '#8b5cf6'
 };
 
 export default function LogConsole() {
