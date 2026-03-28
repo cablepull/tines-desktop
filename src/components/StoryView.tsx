@@ -740,7 +740,12 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
                 onKeyDown={e => {
                   if (e.key === 'Escape') { setSearchOpen(false); setCanvasSearch(''); }
                   if (e.key === 'Enter') {
-                    const match = actions.find(a => (a.name || '').toLowerCase().includes(canvasSearch.toLowerCase()));
+                    const match = actions.find(a => 
+                      (a.name || '').toLowerCase().includes(canvasSearch.toLowerCase()) ||
+                      (a.type || '').toLowerCase().includes(canvasSearch.toLowerCase()) ||
+                      a.id?.toString() === canvasSearch ||
+                      (a as any).guid === canvasSearch
+                    );
                     if (match) flyToNode(match.id!);
                   }
                 }}
@@ -750,7 +755,12 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
               {canvasSearch.length > 0 && (
                 <div style={{ marginTop: '8px', background: 'rgba(15, 23, 42, 0.98)', border: '1px solid var(--glass-border)', borderRadius: '12px', maxHeight: '300px', overflowY: 'auto', boxShadow: '0 12px 48px rgba(0,0,0,0.7)', backdropFilter: 'blur(12px)' }}>
                   {actions
-                    .filter(a => (a.name || '').toLowerCase().includes(canvasSearch.toLowerCase()) || (a.type || '').toLowerCase().includes(canvasSearch.toLowerCase()))
+                    .filter(a => 
+                      (a.name || '').toLowerCase().includes(canvasSearch.toLowerCase()) || 
+                      (a.type || '').toLowerCase().includes(canvasSearch.toLowerCase()) ||
+                      a.id?.toString().includes(canvasSearch) ||
+                      (a as any).guid?.toLowerCase().includes(canvasSearch.toLowerCase())
+                    )
                     .slice(0, 10)
                     .map(a => {
                       const s = getEffectiveSafety(a);
