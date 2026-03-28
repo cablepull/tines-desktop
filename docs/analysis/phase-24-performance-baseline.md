@@ -23,6 +23,18 @@ These numbers were captured on a baseline story with ~20 nodes.
 
 ---
 
+## Phase 24 Complexity Snapshot
+Adding performance instrumentation has slightly increased logic density in the fetch and layout functions. This is the definitive "Pre-Refactor" baseline.
+
+| Component / Function | Phase 23 Complexity | Phase 24 Complexity | Change |
+|----------------------|----------------------|----------------------|--------|
+| `StoryView` (Main) | 34 | 34 | -- |
+| `StoryView` Render Loop | 32 | 32 | -- |
+| `fetchActions` | 13 | 14 | +1 |
+| `classifyAction` | 16 | 16 | -- |
+
+---
+
 ## Performance Regression Testing
 To measure the impact of refactors (e.g., Phase 23's "God Component" split):
 1.  Open the **Log Console (`/` key)**.
