@@ -699,9 +699,9 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
             <button className="btn-glass" onClick={exportPDF} style={{ padding: '4px 12px' }} title="Export PDF">PDF</button>
             <span style={{ width: '1px', background: 'var(--glass-border)' }} />
             <button className="btn-glass" onClick={addNote} style={{ padding: '4px 12px', color: '#fbbf24' }} title="Add sticky note">📝 {notes.length > 0 ? notes.length : ''}</button>
-            <button className="btn-glass" onClick={() => setZoom(z => Math.max(z - 0.2, 0.1))} style={{ padding: '4px 12px' }}>−</button>
-            <button className="btn-glass" onClick={() => setZoom(1)} style={{ padding: '4px 12px', minWidth: '60px' }}>{Math.round(zoom * 100)}%</button>
-            <button className="btn-glass" onClick={() => setZoom(z => Math.min(z + 0.2, 2.5))} style={{ padding: '4px 12px' }}>+</button>
+            <button className="btn-glass" onClick={() => setZoom(z => Math.max(z - 0.2, 0.1))} style={{ padding: '4px 12px' }} title="Zoom out">−</button>
+            <button className="btn-glass" onClick={() => setZoom(1)} style={{ padding: '4px 12px', minWidth: '60px' }} title="Reset zoom to 100%">{Math.round(zoom * 100)}%</button>
+            <button className="btn-glass" onClick={() => setZoom(z => Math.min(z + 0.2, 2.5))} style={{ padding: '4px 12px' }} title="Zoom in">+</button>
           </div>
 
           <div style={{
