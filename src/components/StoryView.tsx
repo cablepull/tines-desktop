@@ -5,6 +5,45 @@ import type { Action } from 'tines-sdk';
 import { useLogger } from '../context/LogContext';
 import NodeInspector from './NodeInspector';
 
+// Phase 11: Safety Classification Engine
+type SafetyTier = 'safe' | 'read-only' | 'interactive' | 'mutating';
+interface SafetyInfo {
+  tier: SafetyTier;
+  color: string;
+  bgColor: string;
+  icon: string;
+  label: string;
+}
+
+const SAFETY_TIERS: Record<SafetyTier, Omit<SafetyInfo, 'tier'>> = {
+  'safe':        { color: '#22c55e', bgColor: 'rgba(34, 197, 94, 0.15)',  icon: '🟢', label: 'Non-Mutating' },
+  'read-only':   { color: '#3b82f6', bgColor: 'rgba(59, 130, 246, 0.15)', icon: '🔵', label: 'External Read' },
+  'interactive': { color: '#f59e0b', bgColor: 'rgba(245, 158, 11, 0.15)', icon: '🟡', label: 'User-Facing' },
+  'mutating':    { color: '#ef4444', bgColor: 'rgba(239, 68, 68, 0.15)',  icon: '🔴', label: 'External Write' },
+};
+
+function classifyAction(action: any): SafetyInfo {
+  const type = action.type || '';
+  const method = (action.options?.method || '').toLowerCase();
+
+  let tier: SafetyTier;
+  if (type === 'Agents::EventTransformationAgent' || type === 'Agents::TriggerAgent') {
+    tier = 'safe';
+  } else if (type === 'Agents::FormAgent' || type === 'Agents::WebhookAgent' || type === 'Agents::ScheduleAgent') {
+    tier = 'interactive';
+  } else if (type === 'Agents::HTTPRequestAgent') {
+    tier = (method === 'get' || method === 'head' || method === 'options') ? 'read-only' : 'mutating';
+  } else if (type === 'Agents::LLMAgent') {
+    tier = 'read-only';
+  } else if (type === 'Agents::EmailAgent' || type === 'Agents::SendToStoryAgent') {
+    tier = 'mutating';
+  } else {
+    tier = 'mutating'; // Default to highest risk
+  }
+
+  return { tier, ...SAFETY_TIERS[tier] };
+}
+
 interface StoryViewProps {
   tenant: string;
   apiKey: string;
@@ -21,10 +60,11 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
   const [actionName, setActionName] = useState('');
   const [actionType, setActionType] = useState('Agents::WebhookAgent');
   const [creating, setCreating] = useState(false);
-  const [viewMode, setViewMode] = useState<'canvas' | 'json'>('canvas');
+  const [viewMode, setViewMode] = useState<'canvas' | 'json' | 'safety'>('canvas');
   const [zoom, setZoom] = useState(1);
   const [toolsCollapsed, setToolsCollapsed] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
+  const [customLabels, setCustomLabels] = useState<Record<number, string>>({});
 
   // Infinite Canvas & Node Dragging State
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -274,10 +314,13 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
         <button onClick={() => setViewMode('canvas')} className={viewMode === 'canvas' ? 'btn-primary' : 'btn-glass'}>
           Visual Canvas
         </button>
+        <button onClick={() => setViewMode('safety')} className={viewMode === 'safety' ? 'btn-primary' : 'btn-glass'} style={viewMode === 'safety' ? { background: '#f59e0b' } : {}}>
+          ⚠ Safety Map
+        </button>
         <button onClick={() => setViewMode('json')} className={viewMode === 'json' ? 'btn-primary' : 'btn-glass'}>
           Raw Context JSON
         </button>
-        {viewMode === 'canvas' && actions.length > 0 && (
+        {(viewMode === 'canvas' || viewMode === 'safety') && actions.length > 0 && (
            <button 
              onClick={recenterCanvas} 
              className="btn-glass" 
@@ -334,22 +377,25 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
                   const sourceAct = actions.find(a => a?.id === sourceId);
                   if (!sourceAct) return null;
                   
-                  // Math algorithms anchoring line to the center-bottom of origin, and center-top of receiver
                   const x1 = (sourceAct.position?.x || 0) + 120; 
                   const y1 = (sourceAct.position?.y || 0) + 90; 
                   const x2 = (act.position?.x || 0) + 120;
                   const y2 = (act.position?.y || 0);
-
-                  // Cubic Bezier calculations
                   const yMid = y1 + (y2 - y1) / 2;
                   const path = `M ${x1} ${y1} C ${x1} ${yMid}, ${x2} ${yMid}, ${x2} ${y2}`;
+
+                  // Safety Map: color SVG links by the receiver's safety tier
+                  let strokeColor = 'var(--glass-border)';
+                  if (viewMode === 'safety') {
+                    strokeColor = classifyAction(act).color;
+                  }
 
                   return (
                     <path 
                       key={`${sourceId}-${act.id}`}
                       d={path}
                       fill="none"
-                      stroke="var(--glass-border)"
+                      stroke={strokeColor}
                       strokeWidth="3"
                       opacity="0.8"
                     />
@@ -362,8 +408,11 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
             
             {actions?.map(act => {
               if (!act) return null;
+              const safety = classifyAction(act);
               const isTrigger = act.type === 'Agents::WebhookAgent' || act.type === 'Agents::TriggerAgent';
               const isBeingDragged = draggedNode === act.id;
+              const isSafetyMode = viewMode === 'safety';
+              const displayLabel = customLabels[act.id!] || safety.label;
               
               return (
               <div key={act.id} className="glass-panel nondraggable" 
@@ -375,23 +424,61 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
                 top: act.position?.y || 0,
                 width: '240px', padding: '1.25rem',
                 boxShadow: isBeingDragged ? '0 16px 48px rgba(0,0,0,0.6)' : '0 8px 32px rgba(0,0,0,0.3)',
-                borderTop: `3px solid ${isTrigger ? 'var(--success-color)' : 'var(--accent-color)'}`, 
+                borderTop: `3px solid ${isSafetyMode ? safety.color : (isTrigger ? 'var(--success-color)' : 'var(--accent-color)')}`,
+                background: isSafetyMode ? safety.bgColor : undefined,
                 cursor: isBeingDragged ? 'grabbing' : 'grab', zIndex: isBeingDragged ? 50 : 10,
                 userSelect: 'none', transition: isBeingDragged ? 'none' : 'box-shadow 0.2s ease'
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
-                  <h4 style={{ fontWeight: 600, color: 'white', margin: 0, pointerEvents: 'none', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{act.name || 'Unnamed Action'}</h4>
-                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                    {isTrigger && <span style={{ background: 'rgba(34,197,94,0.1)', color: 'var(--success-color)', fontSize: '0.65rem', padding: '2px 6px', borderRadius: '4px', fontWeight: 600, letterSpacing: '0.5px', pointerEvents: 'none' }}>TRIGGER</span>}
+                  <h4 style={{ fontWeight: 600, color: 'white', margin: 0, pointerEvents: 'none', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>{act.name || 'Unnamed Action'}</h4>
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexShrink: 0 }}>
+                    {isSafetyMode ? (
+                      <span 
+                        style={{ fontSize: '0.65rem', padding: '2px 6px', borderRadius: '4px', fontWeight: 600, letterSpacing: '0.5px', background: safety.bgColor, color: safety.color, cursor: 'pointer', pointerEvents: 'auto' }}
+                        onDoubleClick={(e) => {
+                          e.stopPropagation();
+                          const newLabel = prompt('Custom safety label:', displayLabel);
+                          if (newLabel !== null) setCustomLabels(prev => ({ ...prev, [act.id!]: newLabel }));
+                        }}
+                        title="Double-click to edit label"
+                      >
+                        {safety.icon} {displayLabel}
+                      </span>
+                    ) : (
+                      isTrigger && <span style={{ background: 'rgba(34,197,94,0.1)', color: 'var(--success-color)', fontSize: '0.65rem', padding: '2px 6px', borderRadius: '4px', fontWeight: 600, letterSpacing: '0.5px', pointerEvents: 'none' }}>TRIGGER</span>
+                    )}
                     <button onClick={(e) => handleDeleteAction(e, act.id!, act.name!)} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.25rem', padding: 0, pointerEvents: 'auto' }} title="Delete Action">×</button>
                   </div>
                 </div>
-                <span style={{ fontSize: '0.75rem', color: isTrigger ? 'var(--success-color)' : 'var(--accent-hover)', pointerEvents: 'none' }}>
+                <span style={{ fontSize: '0.75rem', color: isSafetyMode ? safety.color : (isTrigger ? 'var(--success-color)' : 'var(--accent-hover)'), pointerEvents: 'none' }}>
                   {typeof act.type === 'string' ? act.type.replace('Agents::', '') : 'Unknown Agent'}
                 </span>
+                {isSafetyMode && act.type === 'Agents::HTTPRequestAgent' && (
+                  <div style={{ fontSize: '0.65rem', color: safety.color, marginTop: '0.25rem', opacity: 0.8, pointerEvents: 'none' }}>
+                    HTTP {(act as any).options?.method?.toUpperCase() || 'UNKNOWN'} → {(act as any).options?.url?.split('/').slice(0,4).join('/') || 'N/A'}
+                  </div>
+                )}
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.5rem', pointerEvents: 'none' }}>ID: {act.id}</div>
               </div>
-            )})}
+            )})};
+
+            {/* Safety Map Legend */}
+            {viewMode === 'safety' && (
+              <div style={{ position: 'fixed', top: '120px', right: '20px', zIndex: 2000, background: 'rgba(15, 23, 42, 0.95)', border: '1px solid var(--glass-border)', borderRadius: '12px', padding: '1rem 1.25rem', boxShadow: '0 8px 32px rgba(0,0,0,0.5)', minWidth: '200px' }}>
+                <h4 style={{ margin: '0 0 0.75rem 0', fontSize: '0.85rem', fontWeight: 600, color: 'white' }}>Safety Classification</h4>
+                {(['safe', 'read-only', 'interactive', 'mutating'] as SafetyTier[]).map(tier => {
+                  const info = SAFETY_TIERS[tier];
+                  const count = actions.filter(a => classifyAction(a).tier === tier).length;
+                  return (
+                    <div key={tier} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', fontSize: '0.8rem' }}>
+                      <span>{info.icon}</span>
+                      <span style={{ color: info.color, fontWeight: 500, flex: 1 }}>{info.label}</span>
+                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>{count}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
 

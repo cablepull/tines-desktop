@@ -122,6 +122,31 @@ export default function NodeInspector({ action, tenant, apiKey, onClose }: NodeI
               <div style={{ color: 'var(--accent-hover)', marginTop: '0.25rem', fontFamily: 'monospace' }}>{typeof action.type === 'string' ? action.type.replace('Agents::', '') : 'Unknown'}</div>
             </div>
 
+            <div style={{ marginBottom: '1.5rem' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600, letterSpacing: '0.5px' }}>SAFETY CLASSIFICATION</span>
+              <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                {(() => {
+                  const type = (action as any).type || '';
+                  const method = ((action as any).options?.method || '').toLowerCase();
+                  let tier = 'mutating', icon = '\ud83d\udd34', color = '#ef4444', label = 'External Write';
+                  if (type === 'Agents::EventTransformationAgent' || type === 'Agents::TriggerAgent') { tier = 'safe'; icon = '\ud83d\udfe2'; color = '#22c55e'; label = 'Non-Mutating'; }
+                  else if (type === 'Agents::FormAgent' || type === 'Agents::WebhookAgent' || type === 'Agents::ScheduleAgent') { tier = 'interactive'; icon = '\ud83d\udfe1'; color = '#f59e0b'; label = 'User-Facing'; }
+                  else if (type === 'Agents::HTTPRequestAgent' && ['get','head','options'].includes(method)) { tier = 'read-only'; icon = '\ud83d\udd35'; color = '#3b82f6'; label = 'External Read'; }
+                  else if (type === 'Agents::LLMAgent') { tier = 'read-only'; icon = '\ud83d\udd35'; color = '#3b82f6'; label = 'External Read'; }
+                  return (
+                    <span style={{ fontSize: '0.85rem', padding: '4px 10px', borderRadius: '6px', background: `${color}22`, color, fontWeight: 600 }}>
+                      {icon} {label}
+                    </span>
+                  );
+                })()}
+              </div>
+              {(action as any).type === 'Agents::HTTPRequestAgent' && (
+                <div style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                  Method: <strong>{((action as any).options?.method || 'unknown').toUpperCase()}</strong>
+                </div>
+              )}
+            </div>
+
             <div style={{ marginBottom: '1rem' }}>
               <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600, letterSpacing: '0.5px' }}>PAYLOAD CONFIGURATION</span>
               <pre style={{
