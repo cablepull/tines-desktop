@@ -22,6 +22,7 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
   const [actionType, setActionType] = useState('Agents::WebhookAgent');
   const [creating, setCreating] = useState(false);
   const [viewMode, setViewMode] = useState<'canvas' | 'json'>('canvas');
+  const [zoom, setZoom] = useState(1);
 
   // Infinite Canvas & Node Dragging State
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -97,6 +98,14 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
     }
   };
 
+  const handleWheel = (e: React.WheelEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      setZoom(prev => Math.min(Math.max(prev - e.deltaY * 0.005, 0.1), 2.5));
+    } else {
+      setPan(prev => ({ x: prev.x - e.deltaX, y: prev.y - e.deltaY }));
+    }
+  };
+
   const handleNodeClick = (e: React.MouseEvent, act: Action) => {
     e.stopPropagation();
     setInspectedNode(act);
@@ -131,11 +140,41 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
   const fetchActions = async () => {
     try {
       setLoading(true);
-      addLog('NETWORK', `Fetching actions for Story ${storyId}`);
-      const res: any = await actionsApi.listActions({ storyId, perPage: 50 });
-      const rawActions = res.actions ? res.actions : (Array.isArray(res) ? res : []);
+      const basePath = tenant.startsWith('http') ? tenant : `https://${tenant}`;
+      let rawActions = null;
+
+      addLog('NETWORK', `Beginning Environment Waterfall Fetch for Story ${storyId}`);
+      
+      // Tines dynamically categorizes Actions into three strict isolated environments:
+      // BUILD (The Editor), TEST (Legacy editor), and LIVE (Published execution)
+      // If we attempt to query the wrong environment, Tines accurately securely returns 0.
+      for (const mode of ['BUILD', 'TEST', 'LIVE', undefined]) {
+         addLog('NETWORK', `Probing Environment plane: ${mode || 'DEFAULT'}...`);
+         
+         const url = mode 
+            ? `${basePath}/api/v1/actions?story_id=${storyId}&story_mode=${mode}&per_page=500`
+            : `${basePath}/api/v1/actions?story_id=${storyId}&per_page=500`;
+
+         const actRes = await fetch(url, { headers: { 'Authorization': `Bearer ${apiKey}` } });
+         
+         if (actRes.ok) {
+            const actData = await actRes.json();
+            const extracted = actData.actions || actData.agents || [];
+            if (extracted.length > 0) {
+                addLog('SUCCESS', `Successfully extracted ${extracted.length} actions from the ${mode || 'DEFAULT'} plane!`);
+                rawActions = extracted;
+                break;
+            }
+         }
+      }
+
+      if (!rawActions) rawActions = [];
+
       setActions(rawActions);
-      addLog('SUCCESS', `Loaded ${rawActions.length} actions in Story ${storyId}`);
+      if (rawActions.length === 0) {
+         addLog('WARNING', `All environments yielded 0 actions! The Story is genuinely empty or access is fundamentally restricted.`);
+      }
+
     } catch (err: any) {
       addLog('ERROR', 'Failed to fetch actions', { error: err.message });
     } finally {
@@ -147,6 +186,26 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
     fetchActions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [actionsApi, storyId]);
+
+  // Viewport Auto-Centering Metric
+  useEffect(() => {
+    if (actions.length > 0 && pan.x === 0 && pan.y === 0) {
+      addLog('INFO', `Calculating bounding box for ${actions.length} nodes to auto-center Canvas...`);
+      let minX = Infinity;
+      let minY = Infinity;
+      actions.forEach((a: any) => {
+        const ax = a.position?.x || 0;
+        const ay = a.position?.y || 0;
+        if (ax < minX) minX = ax;
+        if (ay < minY) minY = ay;
+      });
+      if (minX !== Infinity && minY !== Infinity) {
+        // We invert the negative minimum to force the topmost-leftmost node into view at (100, 100) margins.
+        addLog('SUCCESS', `Auto-Pan executing! Target bounds locked to X: ${-minX + 100}, Y: ${-minY + 100}`);
+        setPan({ x: -minX + 100, y: -minY + 100 });
+      }
+    }
+  }, [actions]);
 
   const handleCreateAction = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -194,14 +253,34 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
         <p style={{ color: 'var(--text-secondary)' }}>ID: {storyId}</p>
       </header>
 
-      {/* Mode Switcher */}
-      <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem' }}>
+      {/* Mode Switcher & Recenter */}
+      <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem', alignItems: 'center' }}>
         <button onClick={() => setViewMode('canvas')} className={viewMode === 'canvas' ? 'btn-primary' : 'btn-glass'}>
           Visual Canvas
         </button>
         <button onClick={() => setViewMode('json')} className={viewMode === 'json' ? 'btn-primary' : 'btn-glass'}>
           Raw Context JSON
         </button>
+        {viewMode === 'canvas' && actions.length > 0 && (
+           <button 
+             onClick={() => {
+                let minX = Infinity, minY = Infinity;
+                actions.forEach((a: any) => {
+                  const ax = a.position?.x || 0;
+                  const ay = a.position?.y || 0;
+                  if (ax < minX) minX = ax;
+                  if (ay < minY) minY = ay;
+                });
+                if (minX !== Infinity && minY !== Infinity) {
+                  setPan({ x: -minX + 100, y: -minY + 100 });
+                  addLog('INFO', `Manual override: Panned rigidly to Origin Topology bounds [-${minX}, -${minY}]`);
+                }
+             }} 
+             className="btn-glass" 
+             style={{ marginLeft: 'auto', background: 'rgba(16, 185, 129, 0.1)', color: 'var(--success-color)', border: '1px solid var(--success-color)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+             ⌖ Focus Canvas Over Nodes
+           </button>
+        )}
       </div>
 
       {viewMode === 'json' ? (
@@ -216,30 +295,46 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
         <div style={{ display: 'flex', gap: '2rem', alignItems: 'flex-start', flex: 1, minHeight: '600px' }}>
           
         {/* Actions Canvas Plane */}
+        <div style={{ position: 'absolute', top: 120, right: 350, zIndex: 999999, background: 'rgba(255,0,0,0.8)', padding: '1rem', color: '#fff', borderRadius: '4px', fontFamily: 'monospace', fontWeight: 'bold' }}>
+           <div style={{ fontSize: '1.2rem', marginBottom: '0.5rem' }}>UI RENDER ENGINE:</div>
+           <div>Actions in State: {actions.length}</div>
+           <div>React Pan Vector X: {Math.round(pan.x)}, Y: {Math.round(pan.y)}</div>
+           <div>Current Topology Zoom: {Math.round(zoom * 100)}%</div>
+           <button onClick={() => setPan({x:0, y:0})} style={{ marginTop: '0.5rem', background: '#000', color: '#fff', padding: '4px 8px', border: '1px solid white', cursor: 'pointer' }}>Force Reset Pan 0,0</button>
+        </div>
         <div 
           style={{ 
             flex: 2, position: 'relative', overflow: 'hidden', 
             background: 'var(--bg-card)', border: '1px solid var(--glass-border)',
             borderRadius: '12px', height: '100%', minHeight: '600px',
             cursor: isDragging ? 'grabbing' : 'grab',
-            backgroundSize: '20px 20px',
+            backgroundSize: `${20 * zoom}px ${20 * zoom}px`,
             backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.05) 1px, transparent 1px)',
             backgroundPosition: `${pan.x}px ${pan.y}px`
           }}
           onMouseDown={handleMouseDown} onMouseMove={handleMouseMove}
           onMouseUp={handleGlobalMouseUp} onMouseLeave={handleGlobalMouseUp}
+          onWheel={handleWheel}
         >
+          {/* Zoom Overlay HUD */}
+          <div style={{ position: 'absolute', bottom: '20px', right: '20px', zIndex: 1000, display: 'flex', gap: '0.5rem', background: 'var(--bg-card)', padding: '0.5rem', borderRadius: '8px', border: '1px solid var(--glass-border)', boxShadow: '0 4px 12px rgba(0,0,0,0.5)' }}>
+            <button className="btn-glass" onClick={() => setZoom(z => Math.max(z - 0.2, 0.1))} style={{ padding: '4px 12px' }}>−</button>
+            <button className="btn-glass" onClick={() => setZoom(1)} style={{ padding: '4px 12px', minWidth: '60px' }}>{Math.round(zoom * 100)}%</button>
+            <button className="btn-glass" onClick={() => setZoom(z => Math.min(z + 0.2, 2.5))} style={{ padding: '4px 12px' }}>+</button>
+          </div>
+
           <div style={{
             position: 'absolute', width: '100%', height: '100%',
-            transform: `translate(${pan.x}px, ${pan.y}px)`,
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+            transformOrigin: '0 0',
             transition: isDragging ? 'none' : 'transform 0.05s linear'
           }}>
             {/* SVG Connecting Lines Layer */}
             <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', overflow: 'visible', zIndex: 0 }}>
-              {actions.flatMap(act => {
-                if (!act.sources || act.sources.length === 0) return [];
+              {actions?.flatMap(act => {
+                if (!act || !Array.isArray(act.sources) || act.sources.length === 0) return [];
                 return act.sources.map(sourceId => {
-                  const sourceAct = actions.find(a => a.id === sourceId);
+                  const sourceAct = actions.find(a => a?.id === sourceId);
                   if (!sourceAct) return null;
                   
                   // Math algorithms anchoring line to the center-bottom of origin, and center-top of receiver
@@ -268,7 +363,8 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
 
             {loading && <div style={{ position: 'absolute', top: 20, left: 20, opacity: 0.7 }}>Loading connections...</div>}
             
-            {actions.map(act => {
+            {actions?.map(act => {
+              if (!act) return null;
               const isTrigger = act.type === 'Agents::WebhookAgent' || act.type === 'Agents::TriggerAgent';
               const isBeingDragged = draggedNode === act.id;
               
@@ -287,13 +383,15 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
                 userSelect: 'none', transition: isBeingDragged ? 'none' : 'box-shadow 0.2s ease'
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
-                  <h4 style={{ fontWeight: 600, color: 'white', margin: 0, pointerEvents: 'none' }}>{act.name}</h4>
+                  <h4 style={{ fontWeight: 600, color: 'white', margin: 0, pointerEvents: 'none', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{act.name || 'Unnamed Action'}</h4>
                   <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                     {isTrigger && <span style={{ background: 'rgba(34,197,94,0.1)', color: 'var(--success-color)', fontSize: '0.65rem', padding: '2px 6px', borderRadius: '4px', fontWeight: 600, letterSpacing: '0.5px', pointerEvents: 'none' }}>TRIGGER</span>}
                     <button onClick={(e) => handleDeleteAction(e, act.id!, act.name!)} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.25rem', padding: 0, pointerEvents: 'auto' }} title="Delete Action">×</button>
                   </div>
                 </div>
-                <span style={{ fontSize: '0.75rem', color: isTrigger ? 'var(--success-color)' : 'var(--accent-hover)', pointerEvents: 'none' }}>{act.type ? act.type.replace('Agents::', '') : 'Unknown Agent'}</span>
+                <span style={{ fontSize: '0.75rem', color: isTrigger ? 'var(--success-color)' : 'var(--accent-hover)', pointerEvents: 'none' }}>
+                  {typeof act.type === 'string' ? act.type.replace('Agents::', '') : 'Unknown Agent'}
+                </span>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.5rem', pointerEvents: 'none' }}>ID: {act.id}</div>
               </div>
             )})}

@@ -18,6 +18,7 @@ export default function Dashboard({ tenant, apiKey, onSelectStory }: DashboardPr
   // Create Story Form State
   const [newStoryName, setNewStoryName] = useState('');
   const [creatingStory, setCreatingStory] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const { addLog } = useLogger();
 
   // Initialize the native generated TS SDK client
@@ -185,13 +186,27 @@ export default function Dashboard({ tenant, apiKey, onSelectStory }: DashboardPr
              </form>
           </div>
 
+          <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem' }}>
+             <input 
+               type="text" 
+               placeholder="🔍 Search Stories..."
+               value={searchQuery}
+               onChange={e => setSearchQuery(e.target.value)}
+               style={{
+                 flex: 1, padding: '0.75rem 1rem', fontSize: '1rem',
+                 background: 'var(--bg-elevated)', border: '1px solid var(--glass-border)',
+                 borderRadius: '8px', color: 'white', outline: 'none'
+               }}
+             />
+          </div>
+
           <div style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
             gap: '1.5rem',
             animation: 'fadeIn 0.6s ease forwards'
           }}>
-            {stories.map((story) => (
+            {stories.filter(story => story.name?.toLowerCase().includes(searchQuery.toLowerCase())).map((story) => (
               <div key={story.id || Math.random()} onClick={() => story.id && onSelectStory(story.id)} className="glass-panel" style={{ 
                 padding: '1.5rem',
                 display: 'flex',
