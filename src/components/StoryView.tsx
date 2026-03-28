@@ -71,6 +71,7 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
   const [canvasSearch, setCanvasSearch] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [highlightedNodeId, setHighlightedNodeId] = useState<number | null>(null);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
 
   // Board Comments / Annotations
   interface BoardNote { id: number; x: number; y: number; text: string; color: string; }
@@ -580,6 +581,43 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
     addLog('SUCCESS', `Exported ${1 + grid.cells.length}-page PDF`);
   };
 
+  // Phase 15: Export as Mermaid (LLM-friendly Graphing Language)
+  const exportMermaid = () => {
+    let mmd = 'graph TD\n';
+    // Style definitions
+    mmd += '  classDef safe stroke:#22c55e,stroke-width:2px,fill:rgba(34,197,94,0.1),color:#fff\n';
+    mmd += '  classDef read-only stroke:#3b82f6,stroke-width:2px,fill:rgba(59,130,246,0.1),color:#fff\n';
+    mmd += '  classDef interactive stroke:#f59e0b,stroke-width:2px,fill:rgba(245,158,11,0.1),color:#fff\n';
+    mmd += '  classDef mutating stroke:#ef4444,stroke-width:2px,fill:rgba(239,68,68,0.1),color:#fff\n\n';
+
+    actions.forEach(a => {
+      const safety = getEffectiveSafety(a);
+      const name = (a.name || 'Unnamed').replace(/[\[\]\(\)\"]/g, '');
+      const type = (a.type || '').replace('Agents::', '');
+      mmd += `  ${a.id}["${name} (${type})"]\n`;
+      mmd += `  class ${a.id} ${safety.tier}\n`;
+    });
+
+    actions.forEach(a => {
+      if (a.sources && Array.isArray(a.sources)) {
+        a.sources.forEach(srcId => {
+          mmd += `  ${srcId} --> ${a.id}\n`;
+        });
+      }
+    });
+
+    const blob = new Blob([mmd], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `story-${storyId}-graph.mmd`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    addLog('SUCCESS', 'Exported Story as Mermaid (LLM-friendly)');
+    setExportMenuOpen(false);
+  };
+
   useEffect(() => {
     if (actions.length > 0 && pan.x === 0 && pan.y === 0) {
       // Small delay to ensure canvas ref is mounted
@@ -720,8 +758,31 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
           <div style={{ position: 'absolute', bottom: '20px', right: '20px', zIndex: 1000, display: 'flex', gap: '0.5rem', background: 'var(--bg-card)', padding: '0.5rem', borderRadius: '8px', border: '1px solid var(--glass-border)', boxShadow: '0 4px 12px rgba(0,0,0,0.5)' }}>
             <button className="btn-glass" onClick={autoLayout} style={{ padding: '4px 12px' }} title="Auto-layout nodes">✨</button>
             <button className="btn-glass" onClick={() => setShowGrid(g => !g)} style={{ padding: '4px 12px', color: showGrid ? '#3b82f6' : undefined }} title="Toggle grid overlay">▦</button>
-            <button className="btn-glass" onClick={exportSVG} style={{ padding: '4px 12px' }} title="Export SVG">SVG</button>
-            <button className="btn-glass" onClick={exportPDF} style={{ padding: '4px 12px' }} title="Export PDF">PDF</button>
+            
+            <div style={{ position: 'relative' }}>
+              <button 
+                className="btn-glass" 
+                onClick={() => setExportMenuOpen(prev => !prev)} 
+                style={{ padding: '4px 12px', color: exportMenuOpen ? '#3b82f6' : undefined }} 
+                title="Export Story options (SVG, PDF, Mermaid)"
+              >
+                📤 Export
+              </button>
+              {exportMenuOpen && (
+                <div className="nondraggable" style={{ position: 'absolute', bottom: '100%', right: 0, marginBottom: '8px', background: 'rgba(15, 23, 42, 0.95)', border: '1px solid var(--glass-border)', borderRadius: '8px', padding: '0.5rem', boxShadow: '0 8px 32px rgba(0,0,0,0.5)', minWidth: '180px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <button className="btn-glass" onClick={() => { exportSVG(); setExportMenuOpen(false); }} style={{ width: '100%', textAlign: 'left', padding: '8px 12px' }} title="Export as static vector image">
+                    🖼️ SVG Image
+                  </button>
+                  <button className="btn-glass" onClick={() => { exportPDF(); setExportMenuOpen(false); }} style={{ width: '100%', textAlign: 'left', padding: '8px 12px' }} title="Multi-page PDF for printing (with grid)">
+                    📄 PDF Document
+                  </button>
+                  <button className="btn-glass" onClick={exportMermaid} style={{ width: '100%', textAlign: 'left', padding: '8px 12px' }} title="Graphing language perfect for LLMs and documentation">
+                    🤖 Mermaid (.mmd)
+                  </button>
+                </div>
+              )}
+            </div>
+
             <button className="btn-glass" onClick={() => setSearchOpen(s => !s)} style={{ padding: '4px 12px', color: searchOpen ? '#3b82f6' : undefined }} title="Search actions on canvas">🔍</button>
             <span style={{ width: '1px', background: 'var(--glass-border)' }} />
             <button className="btn-glass" onClick={addNote} style={{ padding: '4px 12px', color: '#fbbf24' }} title="Add sticky note">📝 {notes.length > 0 ? notes.length : ''}</button>
