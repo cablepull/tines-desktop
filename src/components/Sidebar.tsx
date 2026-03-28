@@ -2,11 +2,26 @@ interface SidebarProps {
   tenant: string;
   onLogout: () => void;
   onNavDashboard: () => void;
+  onNavActions: () => void;
+  onNavSettings: () => void;
+  activePage: string;
   collapsed: boolean;
   onToggleCollapse: () => void;
 }
 
-export default function Sidebar({ tenant, onLogout, onNavDashboard, collapsed, onToggleCollapse }: SidebarProps) {
+const NAV_ITEMS = [
+  { key: 'dashboard', label: 'Dashboard', icon: 'D' },
+  { key: 'actions',   label: 'Actions',   icon: 'A' },
+  { key: 'settings',  label: 'Settings',  icon: 'S' },
+];
+
+export default function Sidebar({ tenant, onLogout, onNavDashboard, onNavActions, onNavSettings, activePage, collapsed, onToggleCollapse }: SidebarProps) {
+  const handlers: Record<string, () => void> = {
+    dashboard: onNavDashboard,
+    actions: onNavActions,
+    settings: onNavSettings,
+  };
+
   return (
     <div className="glass-panel" style={{
       width: collapsed ? '60px' : '220px',
@@ -49,25 +64,28 @@ export default function Sidebar({ tenant, onLogout, onNavDashboard, collapsed, o
       )}
 
       <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', flex: 1 }}>
-        {['Dashboard', 'Cases', 'Actions', 'Settings'].map((item, i) => (
-          <button 
-            key={item} 
-            onClick={i === 0 ? onNavDashboard : undefined}
-            className={i === 0 ? 'btn-primary' : 'btn-glass'}
-            style={{ 
-              textAlign: collapsed ? 'center' : 'left',
-              background: i === 0 ? 'var(--accent-color)' : 'transparent',
-              border: i === 0 ? 'none' : undefined,
-              padding: collapsed ? '0.5rem' : undefined,
-              fontSize: collapsed ? '0.7rem' : undefined,
-              overflow: 'hidden',
-              whiteSpace: 'nowrap'
-            }}
-            title={item}
-          >
-            {collapsed ? item[0] : item}
-          </button>
-        ))}
+        {NAV_ITEMS.map(item => {
+          const isActive = activePage === item.key;
+          return (
+            <button 
+              key={item.key}
+              onClick={handlers[item.key]}
+              className={isActive ? 'btn-primary' : 'btn-glass'}
+              style={{ 
+                textAlign: collapsed ? 'center' : 'left',
+                background: isActive ? 'var(--accent-color)' : 'transparent',
+                border: isActive ? 'none' : undefined,
+                padding: collapsed ? '0.5rem' : undefined,
+                fontSize: collapsed ? '0.7rem' : undefined,
+                overflow: 'hidden',
+                whiteSpace: 'nowrap'
+              }}
+              title={item.label}
+            >
+              {collapsed ? item.icon : item.label}
+            </button>
+          );
+        })}
       </nav>
 
       <div style={{ marginTop: 'auto' }}>

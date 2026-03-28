@@ -3,13 +3,18 @@ import Login from './components/Login';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
 import StoryView from './components/StoryView';
+import ActionsPage from './components/ActionsPage';
+import SettingsPage from './components/SettingsPage';
 import { LogProvider, useLogger } from './context/LogContext';
 import LogConsole from './components/LogConsole';
+
+type NavPage = 'dashboard' | 'actions' | 'settings';
 
 function AppContent() {
   const [tenant, setTenant] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [selectedStoryId, setSelectedStoryId] = useState<number | null>(null);
+  const [navPage, setNavPage] = useState<NavPage>('dashboard');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const { setConsoleOpen, addLog } = useLogger();
 
@@ -31,7 +36,8 @@ function AppContent() {
     setSelectedStoryId(null);
   };
 
-  const handleNavDashboard = () => setSelectedStoryId(null);
+  const handleNavDashboard = () => { setNavPage('dashboard'); setSelectedStoryId(null); };
+  const handleSelectStory = (id: number) => { setNavPage('dashboard'); setSelectedStoryId(id); };
 
   return (
     <div style={{ display: 'flex', height: '100vh', width: '100vw' }}>
@@ -41,11 +47,24 @@ function AppContent() {
         <Login onLogin={handleLogin} />
       ) : (
         <>
-          <Sidebar onLogout={handleLogout} onNavDashboard={handleNavDashboard} tenant={tenant} collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed(c => !c)} />
+          <Sidebar 
+            onLogout={handleLogout} 
+            onNavDashboard={handleNavDashboard} 
+            onNavActions={() => { setNavPage('actions'); setSelectedStoryId(null); }}
+            onNavSettings={() => { setNavPage('settings'); setSelectedStoryId(null); }}
+            activePage={navPage}
+            tenant={tenant} 
+            collapsed={sidebarCollapsed} 
+            onToggleCollapse={() => setSidebarCollapsed(c => !c)} 
+          />
           {selectedStoryId ? (
             <StoryView tenant={tenant} apiKey={apiKey} storyId={selectedStoryId} onBack={handleNavDashboard} />
+          ) : navPage === 'actions' ? (
+            <ActionsPage tenant={tenant} apiKey={apiKey} onSelectStory={handleSelectStory} />
+          ) : navPage === 'settings' ? (
+            <SettingsPage tenant={tenant} apiKey={apiKey} />
           ) : (
-            <Dashboard tenant={tenant} apiKey={apiKey} onSelectStory={setSelectedStoryId} />
+            <Dashboard tenant={tenant} apiKey={apiKey} onSelectStory={handleSelectStory} />
           )}
         </>
       )}

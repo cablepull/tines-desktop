@@ -553,7 +553,7 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
             {toolsCollapsed ? '◂' : '▸'}
           </button>
           {!toolsCollapsed && (
-            <>
+          <>
           <h3 style={{ marginBottom: '1rem', fontSize: '1.2rem', fontWeight: 500 }}>Create Action</h3>
           <form onSubmit={handleCreateAction} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -564,9 +564,24 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
               <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>ACTION TYPE</label>
               <select value={actionType} onChange={e => setActionType(e.target.value)} style={{ padding: '0.75rem', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--glass-border)', color: 'white', borderRadius: '8px', outline: 'none' }}>
-                <option value="Agents::WebhookAgent">Webhook Agent</option>
-                <option value="Agents::EventTransformationAgent">Event Transformation</option>
-                <option value="Agents::HttpRequestAgent">HTTP Request</option>
+                <optgroup label="🟢 Entry Points">
+                  <option value="Agents::WebhookAgent">Webhook — Receive inbound data</option>
+                  <option value="Agents::FormAgent">Form — Collect user input</option>
+                  <option value="Agents::IMAPAgent">IMAP — Monitor email inbox</option>
+                </optgroup>
+                <optgroup label="🔵 Logic & Transform">
+                  <option value="Agents::EventTransformationAgent">Event Transform — Reshape data</option>
+                  <option value="Agents::TriggerAgent">Trigger — Conditional branching</option>
+                  <option value="Agents::GroupAgent">Group — Batch & aggregate events</option>
+                </optgroup>
+                <optgroup label="🟡 Communication">
+                  <option value="Agents::HTTPRequestAgent">HTTP Request — Make API calls</option>
+                  <option value="Agents::EmailAgent">Email — Send email notifications</option>
+                  <option value="Agents::LLMAgent">LLM — AI language model</option>
+                </optgroup>
+                <optgroup label="🔴 Advanced">
+                  <option value="Agents::SendToStoryAgent">Send to Story — Chain automations</option>
+                </optgroup>
               </select>
             </div>
 
@@ -574,6 +589,45 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
               {creating ? 'Building...' : '+ Attach Action'}
             </button>
           </form>
+
+          {/* Quick Templates */}
+          <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--glass-border)', paddingTop: '1rem' }}>
+            <h4 style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text-secondary)' }}>⚡ Quick Templates</h4>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {[
+                { name: 'Receive Webhook', type: 'Agents::WebhookAgent', icon: '🌐', desc: 'Inbound HTTP trigger' },
+                { name: 'HTTP GET Request', type: 'Agents::HTTPRequestAgent', icon: '📡', desc: 'Fetch external data' },
+                { name: 'Slack Notification', type: 'Agents::HTTPRequestAgent', icon: '💬', desc: 'Post to Slack channel' },
+                { name: 'Conditional Branch', type: 'Agents::TriggerAgent', icon: '🔀', desc: 'If/then logic split' },
+                { name: 'Data Transform', type: 'Agents::EventTransformationAgent', icon: '🔄', desc: 'Reshape event payload' },
+                { name: 'LLM Summarize', type: 'Agents::LLMAgent', icon: '🧠', desc: 'AI text generation' },
+                { name: 'Send Email Alert', type: 'Agents::EmailAgent', icon: '📧', desc: 'Email notification' },
+              ].map(tpl => (
+                <button
+                  key={tpl.name}
+                  className="btn-glass"
+                  disabled={creating}
+                  onClick={async () => {
+                    setCreating(true);
+                    addLog('NETWORK', `Creating template: ${tpl.name}`);
+                    try {
+                      await actionsApi.createAction({ actionCreateRequest: { name: tpl.name, type: tpl.type as any, storyId: storyId, options: {}, position: {} as any } });
+                      addLog('SUCCESS', `Template "${tpl.name}" attached!`);
+                      fetchActions();
+                    } catch (err: any) { addLog('ERROR', `Template failed: ${err.message}`); }
+                    setCreating(false);
+                  }}
+                  style={{ textAlign: 'left', padding: '0.5rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                >
+                  <span style={{ fontSize: '1rem' }}>{tpl.icon}</span>
+                  <div>
+                    <div style={{ fontWeight: 500 }}>{tpl.name}</div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>{tpl.desc}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
           </>
           )}
         </div>
