@@ -1,4 +1,6 @@
 # Performance Baseline Report - Tines Desktop
+**Status**: Baseline Snapshot (Phase 24)
+**Captured**: 2026-03-28 16:20:00
 
 ## Methodology
 We have implemented **Native Instrumentation** using the `usePerformanceMonitor` hook. This leverages the browser's `performance.mark()` and `performance.measure()` APIs to provide high-resolution timing data.

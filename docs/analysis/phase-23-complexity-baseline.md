@@ -1,4 +1,6 @@
 # Cyclomatic Complexity Audit Report - Tines Desktop
+**Status**: Baseline Snapshot (Phase 23)
+**Captured**: 2026-03-28 16:20:00
 
 ## Overview
 This report evaluates the logical complexity of the Tines Desktop IDE (Electron/React) using **Cyclomatic Complexity** metrics. High complexity indicates functions that are difficult to test, prone to bugs, and challenging to maintain.
