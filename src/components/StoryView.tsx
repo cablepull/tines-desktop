@@ -6,45 +6,12 @@ import { useLogger } from '../context/LogContext';
 import NodeInspector from './NodeInspector';
 import { jsPDF } from 'jspdf';
 import { usePerformanceMonitor } from '../utils/usePerformanceMonitor';
-
-// Phase 11: Safety Classification Engine
-type SafetyTier = 'safe' | 'read-only' | 'interactive' | 'mutating';
-interface SafetyInfo {
-  tier: SafetyTier;
-  color: string;
-  bgColor: string;
-  icon: string;
-  label: string;
-}
-
-const SAFETY_TIERS: Record<SafetyTier, Omit<SafetyInfo, 'tier'>> = {
-  'safe':        { color: '#22c55e', bgColor: 'rgba(34, 197, 94, 0.15)',  icon: '🟢', label: 'Non-Mutating' },
-  'read-only':   { color: '#3b82f6', bgColor: 'rgba(59, 130, 246, 0.15)', icon: '🔵', label: 'External Read' },
-  'interactive': { color: '#f59e0b', bgColor: 'rgba(245, 158, 11, 0.15)', icon: '🟡', label: 'User-Facing' },
-  'mutating':    { color: '#ef4444', bgColor: 'rgba(239, 68, 68, 0.15)',  icon: '🔴', label: 'External Write' },
-};
-
-function classifyAction(action: any): SafetyInfo {
-  const type = action.type || '';
-  const method = (action.options?.method || '').toLowerCase();
-
-  let tier: SafetyTier;
-  if (type === 'Agents::EventTransformationAgent' || type === 'Agents::TriggerAgent') {
-    tier = 'safe';
-  } else if (type === 'Agents::FormAgent' || type === 'Agents::WebhookAgent' || type === 'Agents::ScheduleAgent') {
-    tier = 'interactive';
-  } else if (type === 'Agents::HTTPRequestAgent') {
-    tier = (method === 'get' || method === 'head' || method === 'options') ? 'read-only' : 'mutating';
-  } else if (type === 'Agents::LLMAgent') {
-    tier = 'read-only';
-  } else if (type === 'Agents::EmailAgent' || type === 'Agents::SendToStoryAgent') {
-    tier = 'mutating';
-  } else {
-    tier = 'mutating'; // Default to highest risk
-  }
-
-  return { tier, ...SAFETY_TIERS[tier] };
-}
+import { 
+  type SafetyTier, 
+  type SafetyInfo, 
+  SAFETY_TIERS, 
+  getEffectiveSafety 
+} from '../utils/safetyEngine';
 
 interface StoryViewProps {
   tenant: string;
@@ -95,11 +62,7 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
   };
 
   // Resolve safety with overrides applied
-  const getEffectiveSafety = (act: any): SafetyInfo => {
-    const override = tierOverrides[act.id];
-    if (override) return { tier: override, ...SAFETY_TIERS[override] };
-    return classifyAction(act);
-  };
+  const getSafety = (act: any): SafetyInfo => getEffectiveSafety(act, tierOverrides);
 
   // Infinite Canvas & Node Dragging State
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -600,7 +563,7 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
     mmd += '  classDef mutating stroke:#ef4444,stroke-width:2px,fill:rgba(239,68,68,0.1),color:#fff\n\n';
 
     actions.forEach(a => {
-      const safety = getEffectiveSafety(a);
+      const safety = getSafety(a);
       const name = (a.name || 'Unnamed').replace(/[\[\]\(\)\"]/g, '');
       const type = (a.type || '').replace('Agents::', '');
       mmd += `  ${a.id}["${name} (${type})"]\n`;
@@ -833,7 +796,7 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
                     )
                     .slice(0, 10)
                     .map(a => {
-                      const s = getEffectiveSafety(a);
+                      const s = getSafety(a);
                       return (
                         <div
                           key={a.id}
@@ -1053,7 +1016,7 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
                 <h4 style={{ margin: '0 0 0.75rem 0', fontSize: '0.85rem', fontWeight: 600, color: 'white' }}>Safety Classification</h4>
                 {(['safe', 'read-only', 'interactive', 'mutating'] as SafetyTier[]).map(tier => {
                   const info = SAFETY_TIERS[tier];
-                  const count = actions.filter(a => getEffectiveSafety(a).tier === tier).length;
+                  const count = actions.filter(a => getSafety(a).tier === tier).length;
                   return (
                     <div key={tier} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', fontSize: '0.8rem' }}>
                       <span>{info.icon}</span>

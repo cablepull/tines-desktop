@@ -2,25 +2,10 @@
 import { useEffect, useState } from 'react';
 import { Configuration, ActionsApi } from 'tines-sdk';
 import { useLogger } from '../context/LogContext';
-
-// Reuse safety classification for the table
-type SafetyTier = 'safe' | 'read-only' | 'interactive' | 'mutating';
-const SAFETY_COLORS: Record<SafetyTier, { icon: string; color: string; label: string }> = {
-  'safe':        { icon: '🟢', color: '#22c55e', label: 'Non-Mutating' },
-  'read-only':   { icon: '🔵', color: '#3b82f6', label: 'External Read' },
-  'interactive': { icon: '🟡', color: '#f59e0b', label: 'User-Facing' },
-  'mutating':    { icon: '🔴', color: '#ef4444', label: 'External Write' },
-};
-
-function quickClassify(action: any): SafetyTier {
-  const type = action.type || '';
-  const method = (action.options?.method || '').toLowerCase();
-  if (type === 'Agents::EventTransformationAgent' || type === 'Agents::TriggerAgent') return 'safe';
-  if (type === 'Agents::FormAgent' || type === 'Agents::WebhookAgent' || type === 'Agents::ScheduleAgent') return 'interactive';
-  if (type === 'Agents::HTTPRequestAgent' && ['get','head','options'].includes(method)) return 'read-only';
-  if (type === 'Agents::LLMAgent') return 'read-only';
-  return 'mutating';
-}
+import { 
+  classifyAction, 
+  type SafetyTier 
+} from '../utils/safetyEngine';
 
 interface ActionsPageProps {
   tenant: string;
@@ -60,7 +45,7 @@ export default function ActionsPage({ tenant, apiKey, onSelectStory }: ActionsPa
     const matchesSearch = !search || 
       (a.name || '').toLowerCase().includes(search.toLowerCase()) ||
       (a.type || '').toLowerCase().includes(search.toLowerCase());
-    const matchesTier = filterTier === 'all' || quickClassify(a) === filterTier;
+    const matchesTier = filterTier === 'all' || classifyAction(a).tier === filterTier;
     return matchesSearch && matchesTier;
   });
 
@@ -101,26 +86,25 @@ export default function ActionsPage({ tenant, apiKey, onSelectStory }: ActionsPa
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             {filtered.map(act => {
-              const tier = quickClassify(act);
-              const info = SAFETY_COLORS[tier];
+              const s = classifyAction(act);
               return (
                 <div
                   key={act.id}
                   className="glass-panel"
                   onClick={() => act.story_id && onSelectStory(act.story_id)}
-                  style={{ padding: '1rem 1.25rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '1rem', borderLeft: `3px solid ${info.color}`, transition: 'transform 0.1s ease' }}
+                  style={{ padding: '1rem 1.25rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '1rem', borderLeft: `3px solid ${s.color}`, transition: 'transform 0.1s ease' }}
                   onMouseEnter={e => (e.currentTarget.style.transform = 'translateX(4px)')}
                   onMouseLeave={e => (e.currentTarget.style.transform = 'none')}
                 >
-                  <span style={{ fontSize: '1.2rem' }}>{info.icon}</span>
+                  <span style={{ fontSize: '1.2rem' }}>{s.icon}</span>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 600, color: 'white' }}>{act.name || 'Unnamed'}</div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                       {(act.type || '').replace('Agents::', '')} · Story {act.story_id || '?'}
                     </div>
                   </div>
-                  <span style={{ fontSize: '0.7rem', padding: '2px 8px', borderRadius: '4px', background: `${info.color}22`, color: info.color, fontWeight: 600 }}>
-                    {info.label}
+                  <span style={{ fontSize: '0.7rem', padding: '2px 8px', borderRadius: '4px', background: `${s.color}22`, color: s.color, fontWeight: 600 }}>
+                    {s.label}
                   </span>
                 </div>
               );
