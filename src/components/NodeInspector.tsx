@@ -128,11 +128,11 @@ export default function NodeInspector({ action, tenant, apiKey, onClose }: NodeI
                 {(() => {
                   const type = (action as any).type || '';
                   const method = ((action as any).options?.method || '').toLowerCase();
-                  let tier = 'mutating', icon = '\ud83d\udd34', color = '#ef4444', label = 'External Write';
-                  if (type === 'Agents::EventTransformationAgent' || type === 'Agents::TriggerAgent') { tier = 'safe'; icon = '\ud83d\udfe2'; color = '#22c55e'; label = 'Non-Mutating'; }
-                  else if (type === 'Agents::FormAgent' || type === 'Agents::WebhookAgent' || type === 'Agents::ScheduleAgent') { tier = 'interactive'; icon = '\ud83d\udfe1'; color = '#f59e0b'; label = 'User-Facing'; }
-                  else if (type === 'Agents::HTTPRequestAgent' && ['get','head','options'].includes(method)) { tier = 'read-only'; icon = '\ud83d\udd35'; color = '#3b82f6'; label = 'External Read'; }
-                  else if (type === 'Agents::LLMAgent') { tier = 'read-only'; icon = '\ud83d\udd35'; color = '#3b82f6'; label = 'External Read'; }
+                  let icon = '\ud83d\udd34', color = '#ef4444', label = 'External Write';
+                  if (type === 'Agents::EventTransformationAgent' || type === 'Agents::TriggerAgent') { icon = '\ud83d\udfe2'; color = '#22c55e'; label = 'Non-Mutating'; }
+                  else if (type === 'Agents::FormAgent' || type === 'Agents::WebhookAgent' || type === 'Agents::ScheduleAgent') { icon = '\ud83d\udfe1'; color = '#f59e0b'; label = 'User-Facing'; }
+                  else if (type === 'Agents::HTTPRequestAgent' && ['get','head','options'].includes(method)) { icon = '\ud83d\udd35'; color = '#3b82f6'; label = 'External Read'; }
+                  else if (type === 'Agents::LLMAgent') { icon = '\ud83d\udd35'; color = '#3b82f6'; label = 'External Read'; }
                   return (
                     <span style={{ fontSize: '0.85rem', padding: '4px 10px', borderRadius: '6px', background: `${color}22`, color, fontWeight: 600 }}>
                       {icon} {label}
