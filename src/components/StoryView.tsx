@@ -339,13 +339,49 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
       </div>
 
       {viewMode === 'json' ? (
-        <pre style={{
-          background: 'rgba(0,0,0,0.5)', padding: '1.5rem', borderRadius: '12px',
-          overflow: 'auto', maxHeight: '500px',
-          color: '#a5d6ff', fontSize: '0.85rem', border: '1px solid var(--glass-border)'
-        }}>
-          {JSON.stringify(actions, null, 2)}
-        </pre>
+        <div style={{ overflow: 'auto', maxHeight: '80vh' }}>
+          {actions.map((act, i) => {
+            const safety = getEffectiveSafety(act);
+            const isOverridden = tierOverrides[act.id!] !== undefined;
+            return (
+              <div key={act.id || i} style={{
+                marginBottom: '0.75rem', borderRadius: '8px', overflow: 'hidden',
+                border: `1px solid ${safety.color}44`, background: safety.bgColor
+              }}>
+                <div style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '0.5rem 1rem', borderBottom: `1px solid ${safety.color}33`,
+                  background: `${safety.color}15`
+                }}>
+                  <span style={{ fontWeight: 600, color: 'white', fontSize: '0.9rem' }}>
+                    {act.name || 'Unnamed'}
+                  </span>
+                  <span style={{
+                    fontSize: '0.7rem', padding: '2px 8px', borderRadius: '4px',
+                    background: safety.bgColor, color: safety.color, fontWeight: 600
+                  }}>
+                    {isOverridden ? '\ud83d\udd13 ' : ''}{safety.icon} {safety.label}
+                  </span>
+                </div>
+                <pre style={{
+                  padding: '0.75rem 1rem', margin: 0,
+                  fontSize: '0.8rem', color: '#a5d6ff', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                  background: 'rgba(0,0,0,0.3)'
+                }}>
+                  {JSON.stringify(act, null, 2)}
+                </pre>
+              </div>
+            );
+          })}
+          {actions.length === 0 && (
+            <pre style={{
+              background: 'rgba(0,0,0,0.5)', padding: '1.5rem', borderRadius: '12px',
+              color: '#a5d6ff', fontSize: '0.85rem', border: '1px solid var(--glass-border)'
+            }}>
+              []
+            </pre>
+          )}
+        </div>
       ) : (
         <div style={{ display: 'flex', gap: '2rem', alignItems: 'flex-start', flex: 1, minHeight: '600px' }}>
           
