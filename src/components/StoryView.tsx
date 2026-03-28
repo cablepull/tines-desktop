@@ -65,6 +65,14 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
   const [toolsCollapsed, setToolsCollapsed] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
   const [customLabels, setCustomLabels] = useState<Record<number, string>>({});
+  const [tierOverrides, setTierOverrides] = useState<Record<number, SafetyTier>>({});
+
+  // Resolve safety with overrides applied
+  const getEffectiveSafety = (act: any): SafetyInfo => {
+    const override = tierOverrides[act.id];
+    if (override) return { tier: override, ...SAFETY_TIERS[override] };
+    return classifyAction(act);
+  };
 
   // Infinite Canvas & Node Dragging State
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -387,7 +395,7 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
                   // Safety Map: color SVG links by the receiver's safety tier
                   let strokeColor = 'var(--glass-border)';
                   if (viewMode === 'safety') {
-                    strokeColor = classifyAction(act).color;
+                    strokeColor = getEffectiveSafety(act).color;
                   }
 
                   return (
@@ -408,7 +416,8 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
             
             {actions?.map(act => {
               if (!act) return null;
-              const safety = classifyAction(act);
+              const safety = getEffectiveSafety(act);
+              const isOverridden = tierOverrides[act.id!] !== undefined;
               const isTrigger = act.type === 'Agents::WebhookAgent' || act.type === 'Agents::TriggerAgent';
               const isBeingDragged = draggedNode === act.id;
               const isSafetyMode = viewMode === 'safety';
@@ -434,15 +443,25 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
                   <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexShrink: 0 }}>
                     {isSafetyMode ? (
                       <span 
-                        style={{ fontSize: '0.65rem', padding: '2px 6px', borderRadius: '4px', fontWeight: 600, letterSpacing: '0.5px', background: safety.bgColor, color: safety.color, cursor: 'pointer', pointerEvents: 'auto' }}
-                        onDoubleClick={(e) => {
+                        style={{ fontSize: '0.65rem', padding: '2px 6px', borderRadius: '4px', fontWeight: 600, letterSpacing: '0.5px', background: safety.bgColor, color: safety.color, cursor: 'pointer', pointerEvents: 'auto', position: 'relative' }}
+                        onClick={(e) => {
                           e.stopPropagation();
-                          const newLabel = prompt('Custom safety label:', displayLabel);
-                          if (newLabel !== null) setCustomLabels(prev => ({ ...prev, [act.id!]: newLabel }));
+                          // Cycle through tiers on click
+                          const tiers: SafetyTier[] = ['safe', 'read-only', 'interactive', 'mutating'];
+                          const currentIdx = tiers.indexOf(safety.tier);
+                          const nextTier = tiers[(currentIdx + 1) % tiers.length];
+                          setTierOverrides(prev => ({ ...prev, [act.id!]: nextTier }));
                         }}
-                        title="Double-click to edit label"
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          // Right-click to reset to auto
+                          setTierOverrides(prev => { const n = {...prev}; delete n[act.id!]; return n; });
+                          setCustomLabels(prev => { const n = {...prev}; delete n[act.id!]; return n; });
+                        }}
+                        title={`Click to cycle tier${isOverridden ? ' • Right-click to reset to auto' : ''}`}
                       >
-                        {safety.icon} {displayLabel}
+                        {isOverridden ? '🔓' : ''} {safety.icon} {displayLabel}
                       </span>
                     ) : (
                       isTrigger && <span style={{ background: 'rgba(34,197,94,0.1)', color: 'var(--success-color)', fontSize: '0.65rem', padding: '2px 6px', borderRadius: '4px', fontWeight: 600, letterSpacing: '0.5px', pointerEvents: 'none' }}>TRIGGER</span>
@@ -468,7 +487,7 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
                 <h4 style={{ margin: '0 0 0.75rem 0', fontSize: '0.85rem', fontWeight: 600, color: 'white' }}>Safety Classification</h4>
                 {(['safe', 'read-only', 'interactive', 'mutating'] as SafetyTier[]).map(tier => {
                   const info = SAFETY_TIERS[tier];
-                  const count = actions.filter(a => classifyAction(a).tier === tier).length;
+                  const count = actions.filter(a => getEffectiveSafety(a).tier === tier).length;
                   return (
                     <div key={tier} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', fontSize: '0.8rem' }}>
                       <span>{info.icon}</span>
