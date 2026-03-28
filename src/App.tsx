@@ -10,6 +10,7 @@ function AppContent() {
   const [tenant, setTenant] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [selectedStoryId, setSelectedStoryId] = useState<number | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const { setConsoleOpen, addLog } = useLogger();
 
   useEffect(() => {
@@ -40,7 +41,7 @@ function AppContent() {
         <Login onLogin={handleLogin} />
       ) : (
         <>
-          <Sidebar onLogout={handleLogout} onNavDashboard={handleNavDashboard} tenant={tenant} />
+          <Sidebar onLogout={handleLogout} onNavDashboard={handleNavDashboard} tenant={tenant} collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed(c => !c)} />
           {selectedStoryId ? (
             <StoryView tenant={tenant} apiKey={apiKey} storyId={selectedStoryId} onBack={handleNavDashboard} />
           ) : (

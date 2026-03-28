@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { Configuration, ActionsApi } from 'tines-sdk';
 import type { Action } from 'tines-sdk';
 import { useLogger } from '../context/LogContext';
@@ -23,6 +23,8 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
   const [creating, setCreating] = useState(false);
   const [viewMode, setViewMode] = useState<'canvas' | 'json'>('canvas');
   const [zoom, setZoom] = useState(1);
+  const [toolsCollapsed, setToolsCollapsed] = useState(false);
+  const canvasRef = useRef<HTMLDivElement>(null);
 
   // Infinite Canvas & Node Dragging State
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -187,23 +189,37 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [actionsApi, storyId]);
 
-  // Viewport Auto-Centering Metric
+  // Viewport Auto-Centering: Calculate bounding box center and offset to canvas center
+  const recenterCanvas = () => {
+    if (actions.length === 0) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    actions.forEach((a: any) => {
+      const ax = a.position?.x || 0;
+      const ay = a.position?.y || 0;
+      if (ax < minX) minX = ax;
+      if (ay < minY) minY = ay;
+      if (ax + 240 > maxX) maxX = ax + 240; // node width
+      if (ay + 100 > maxY) maxY = ay + 100; // node height
+    });
+    const graphW = maxX - minX;
+    const graphH = maxY - minY;
+    const containerW = canvasRef.current?.clientWidth || 800;
+    const containerH = canvasRef.current?.clientHeight || 600;
+    // Calculate zoom to fit if graph is larger than container
+    const fitZoom = Math.min(containerW / (graphW + 100), containerH / (graphH + 100), 1);
+    const newZoom = Math.max(fitZoom, 0.15);
+    // Center the graph in the container
+    const offsetX = (containerW / newZoom - graphW) / 2 - minX;
+    const offsetY = (containerH / newZoom - graphH) / 2 - minY;
+    setZoom(newZoom);
+    setPan({ x: offsetX * newZoom, y: offsetY * newZoom });
+    addLog('INFO', `Centered ${actions.length} nodes (zoom: ${Math.round(newZoom*100)}%)`);
+  };
+
   useEffect(() => {
     if (actions.length > 0 && pan.x === 0 && pan.y === 0) {
-      addLog('INFO', `Calculating bounding box for ${actions.length} nodes to auto-center Canvas...`);
-      let minX = Infinity;
-      let minY = Infinity;
-      actions.forEach((a: any) => {
-        const ax = a.position?.x || 0;
-        const ay = a.position?.y || 0;
-        if (ax < minX) minX = ax;
-        if (ay < minY) minY = ay;
-      });
-      if (minX !== Infinity && minY !== Infinity) {
-        // We invert the negative minimum to force the topmost-leftmost node into view at (100, 100) margins.
-        addLog('SUCCESS', `Auto-Pan executing! Target bounds locked to X: ${-minX + 100}, Y: ${-minY + 100}`);
-        setPan({ x: -minX + 100, y: -minY + 100 });
-      }
+      // Small delay to ensure canvas ref is mounted
+      setTimeout(recenterCanvas, 100);
     }
   }, [actions]);
 
@@ -263,19 +279,7 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
         </button>
         {viewMode === 'canvas' && actions.length > 0 && (
            <button 
-             onClick={() => {
-                let minX = Infinity, minY = Infinity;
-                actions.forEach((a: any) => {
-                  const ax = a.position?.x || 0;
-                  const ay = a.position?.y || 0;
-                  if (ax < minX) minX = ax;
-                  if (ay < minY) minY = ay;
-                });
-                if (minX !== Infinity && minY !== Infinity) {
-                  setPan({ x: -minX + 100, y: -minY + 100 });
-                  addLog('INFO', `Manual override: Panned rigidly to Origin Topology bounds [-${minX}, -${minY}]`);
-                }
-             }} 
+             onClick={recenterCanvas} 
              className="btn-glass" 
              style={{ marginLeft: 'auto', background: 'rgba(16, 185, 129, 0.1)', color: 'var(--success-color)', border: '1px solid var(--success-color)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
              ⌖ Focus Canvas Over Nodes
@@ -295,7 +299,7 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
         <div style={{ display: 'flex', gap: '2rem', alignItems: 'flex-start', flex: 1, minHeight: '600px' }}>
           
         {/* Actions Canvas Plane */}
-        <div 
+        <div ref={canvasRef}
           style={{ 
             flex: 2, position: 'relative', overflow: 'hidden', 
             background: 'var(--bg-card)', border: '1px solid var(--glass-border)',
@@ -391,8 +395,23 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
           </div>
         </div>
 
-        {/* Create Action Drawer */}
-        <div className="glass-panel nondraggable" style={{ flex: 1, padding: '1.5rem', background: 'rgba(59, 130, 246, 0.05)', borderColor: 'rgba(59, 130, 246, 0.2)' }}>
+        {/* Create Action Drawer — Collapsible */}
+        <div className="glass-panel nondraggable" style={{ 
+          width: toolsCollapsed ? '40px' : '280px', 
+          padding: toolsCollapsed ? '1rem 0.5rem' : '1.5rem', 
+          background: 'rgba(59, 130, 246, 0.05)', borderColor: 'rgba(59, 130, 246, 0.2)',
+          transition: 'width 0.25s ease, padding 0.25s ease',
+          overflow: 'hidden', flexShrink: 0, position: 'relative'
+        }}>
+          <button 
+            onClick={() => setToolsCollapsed(c => !c)}
+            style={{ position: 'absolute', top: '0.5rem', right: toolsCollapsed ? '0.5rem' : '0.75rem', background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1rem', zIndex: 10 }}
+            title={toolsCollapsed ? 'Show tools' : 'Hide tools'}
+          >
+            {toolsCollapsed ? '◂' : '▸'}
+          </button>
+          {!toolsCollapsed && (
+            <>
           <h3 style={{ marginBottom: '1rem', fontSize: '1.2rem', fontWeight: 500 }}>Create Action</h3>
           <form onSubmit={handleCreateAction} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -413,6 +432,8 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
               {creating ? 'Building...' : '+ Attach Action'}
             </button>
           </form>
+          </>
+          )}
         </div>
         {inspectedNode && <NodeInspector action={inspectedNode} tenant={tenant} apiKey={apiKey} onClose={() => setInspectedNode(null)} />}
       </div>
