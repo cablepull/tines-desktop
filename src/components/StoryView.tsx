@@ -68,6 +68,9 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
   const [customLabels, setCustomLabels] = useState<Record<number, string>>({});
   const [tierOverrides, setTierOverrides] = useState<Record<number, SafetyTier>>({});
   const [showGrid, setShowGrid] = useState(false);
+  const [canvasSearch, setCanvasSearch] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [highlightedNodeId, setHighlightedNodeId] = useState<number | null>(null);
 
   // Board Comments / Annotations
   interface BoardNote { id: number; x: number; y: number; text: string; color: string; }
@@ -292,6 +295,28 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
     setZoom(newZoom);
     setPan({ x: offsetX * newZoom, y: offsetY * newZoom });
     addLog('INFO', `Centered ${actions.length} nodes (zoom: ${Math.round(newZoom*100)}%)`);
+  };
+
+  // Fly-to-node: pan + zoom to center a specific node
+  const flyToNode = (actionId: number) => {
+    const act = actions.find(a => a.id === actionId);
+    if (!act) return;
+    const containerW = canvasRef.current?.clientWidth || 800;
+    const containerH = canvasRef.current?.clientHeight || 600;
+    const targetZoom = 1.2;
+    const nx = act.position?.x || 0;
+    const ny = act.position?.y || 0;
+    const offsetX = containerW / 2 - (nx + NODE_W / 2) * targetZoom;
+    const offsetY = containerH / 2 - (ny + NODE_H / 2) * targetZoom;
+    setZoom(targetZoom);
+    setPan({ x: offsetX, y: offsetY });
+    setHighlightedNodeId(actionId);
+    setInspectedNode(act);
+    setSearchOpen(false);
+    setCanvasSearch('');
+    addLog('INFO', `Flying to node: ${act.name}`);
+    // Clear highlight after 3 seconds
+    setTimeout(() => setHighlightedNodeId(null), 3000);
   };
 
   // Phase 13: Topological Auto-Layout (de-overlap)
@@ -697,12 +722,62 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
             <button className="btn-glass" onClick={() => setShowGrid(g => !g)} style={{ padding: '4px 12px', color: showGrid ? '#3b82f6' : undefined }} title="Toggle grid overlay">▦</button>
             <button className="btn-glass" onClick={exportSVG} style={{ padding: '4px 12px' }} title="Export SVG">SVG</button>
             <button className="btn-glass" onClick={exportPDF} style={{ padding: '4px 12px' }} title="Export PDF">PDF</button>
+            <button className="btn-glass" onClick={() => setSearchOpen(s => !s)} style={{ padding: '4px 12px', color: searchOpen ? '#3b82f6' : undefined }} title="Search actions on canvas">🔍</button>
             <span style={{ width: '1px', background: 'var(--glass-border)' }} />
             <button className="btn-glass" onClick={addNote} style={{ padding: '4px 12px', color: '#fbbf24' }} title="Add sticky note">📝 {notes.length > 0 ? notes.length : ''}</button>
             <button className="btn-glass" onClick={() => setZoom(z => Math.max(z - 0.2, 0.1))} style={{ padding: '4px 12px' }} title="Zoom out">−</button>
             <button className="btn-glass" onClick={() => setZoom(1)} style={{ padding: '4px 12px', minWidth: '60px' }} title="Reset zoom to 100%">{Math.round(zoom * 100)}%</button>
             <button className="btn-glass" onClick={() => setZoom(z => Math.min(z + 0.2, 2.5))} style={{ padding: '4px 12px' }} title="Zoom in">+</button>
           </div>
+
+          {/* Canvas Search Overlay */}
+          {searchOpen && (
+            <div className="nondraggable" style={{ position: 'absolute', top: '20px', left: '50%', transform: 'translateX(-50%)', zIndex: 1001, width: '360px' }}>
+              <input
+                autoFocus
+                value={canvasSearch}
+                onChange={e => setCanvasSearch(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Escape') { setSearchOpen(false); setCanvasSearch(''); }
+                  if (e.key === 'Enter') {
+                    const match = actions.find(a => (a.name || '').toLowerCase().includes(canvasSearch.toLowerCase()));
+                    if (match) flyToNode(match.id!);
+                  }
+                }}
+                placeholder="Search actions... (Enter to fly, Esc to close)"
+                style={{ width: '100%', padding: '0.75rem 1rem', background: 'rgba(15, 23, 42, 0.95)', border: '1.5px solid var(--accent-color)', borderRadius: '12px', color: 'white', fontSize: '0.95rem', outline: 'none', boxShadow: '0 8px 32px rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)' }}
+              />
+              {canvasSearch.length > 0 && (
+                <div style={{ marginTop: '8px', background: 'rgba(15, 23, 42, 0.98)', border: '1px solid var(--glass-border)', borderRadius: '12px', maxHeight: '300px', overflowY: 'auto', boxShadow: '0 12px 48px rgba(0,0,0,0.7)', backdropFilter: 'blur(12px)' }}>
+                  {actions
+                    .filter(a => (a.name || '').toLowerCase().includes(canvasSearch.toLowerCase()) || (a.type || '').toLowerCase().includes(canvasSearch.toLowerCase()))
+                    .slice(0, 10)
+                    .map(a => {
+                      const s = getEffectiveSafety(a);
+                      return (
+                        <div
+                          key={a.id}
+                          onClick={() => flyToNode(a.id!)}
+                          style={{ padding: '0.75rem 1rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.75rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}
+                          onMouseEnter={e => (e.currentTarget.style.background = 'rgba(99,102,241,0.15)')}
+                          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                        >
+                          <span style={{ fontSize: '1.1rem' }}>{s.icon}</span>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontWeight: 600, color: 'white', fontSize: '0.9rem' }}>{a.name || 'Unnamed'}</div>
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{(a.type || '').replace('Agents::', '')}</div>
+                          </div>
+                          <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: '4px' }}>#{a.id}</span>
+                        </div>
+                      );
+                    })}
+                  {actions.filter(a => (a.name || '').toLowerCase().includes(canvasSearch.toLowerCase()) || (a.type || '').toLowerCase().includes(canvasSearch.toLowerCase())).length === 0 && (
+                    <div style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.85rem', textAlign: 'center' }}>No matching actions found</div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           <div style={{
             position: 'absolute', width: '100%', height: '100%',
@@ -769,7 +844,9 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
                 borderTop: `3px solid ${isSafetyMode ? safety.color : (isTrigger ? 'var(--success-color)' : 'var(--accent-color)')}`,
                 background: isSafetyMode ? safety.bgColor : undefined,
                 cursor: isBeingDragged ? 'grabbing' : 'grab', zIndex: isBeingDragged ? 50 : 10,
-                userSelect: 'none', transition: isBeingDragged ? 'none' : 'box-shadow 0.2s ease'
+                userSelect: 'none', transition: isBeingDragged ? 'none' : 'box-shadow 0.2s ease, outline 0.2s ease',
+                outline: highlightedNodeId === act.id ? '4px solid var(--accent-color)' : 'none',
+                outlineOffset: '4px'
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
                   <h4 style={{ fontWeight: 600, color: 'white', margin: 0, pointerEvents: 'none', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>{act.name || 'Unnamed Action'}</h4>
