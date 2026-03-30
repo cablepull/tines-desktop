@@ -1,8 +1,30 @@
 const { app, BrowserWindow, ipcMain, safeStorage, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const db = require('./db.cjs');
 
 const profilesPath = () => path.join(app.getPath('userData'), 'tines-profiles.enc');
+const isDev = process.env.NODE_ENV === 'development';
+const remoteDebugPort = process.env.REMOTE_DEBUG_PORT || '9223';
+
+if (isDev && !app.commandLine.hasSwitch('remote-debugging-port')) {
+  app.commandLine.appendSwitch('remote-debugging-port', remoteDebugPort);
+}
+
+// Initialize DuckDB
+app.whenReady().then(async () => {
+  await db.init(app.getPath('userData'));
+});
+
+ipcMain.handle('db-save-events', (event, events) => db.saveEvents(events));
+ipcMain.handle('db-save-logs', (event, logs) => db.saveLogs(logs));
+ipcMain.handle('db-get-events', (event, { storyId, actionId, limit, offset }) => db.getEvents(storyId, actionId, limit, offset));
+ipcMain.handle('db-get-logs', (event, { storyId, actionId, limit, offset }) => db.getLogs(storyId, actionId, limit, offset));
+ipcMain.handle('db-save-investigation', (event, investigation) => db.saveInvestigation(investigation));
+ipcMain.handle('db-list-investigations', (event, args) => db.listInvestigations(args));
+ipcMain.handle('db-get-investigation', (event, id) => db.getInvestigation(id));
+ipcMain.handle('db-delete-investigation', (event, id) => db.deleteInvestigation(id));
+ipcMain.handle('db-clear-all', () => db.clearDatabase());
 
 ipcMain.handle('get-profiles', () => {
   const pPath = profilesPath();
@@ -60,8 +82,6 @@ ipcMain.handle('open-external', async (event, url) => {
   return true;
 });
 
-const isDev = process.env.NODE_ENV === 'development';
-
 function createWindow() {
   const mainWindow = new BrowserWindow({
     width: 1200,
@@ -76,11 +96,18 @@ function createWindow() {
   });
 
   if (isDev) {
-    mainWindow.loadURL('http://localhost:5199');
+    mainWindow.loadURL(`http://localhost:${process.env.VITE_PORT || 5199}`);
     mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
+
+  // Allow opening DevTools in production with a shortcut for Alpha debugging
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if ((input.control || input.meta) && input.shift && input.key.toLowerCase() === 'i') {
+      mainWindow.webContents.openDevTools();
+    }
+  });
 }
 
 app.whenReady().then(() => {

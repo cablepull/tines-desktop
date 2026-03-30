@@ -1,4 +1,38 @@
-# React + TypeScript + Vite
+# Tines Desktop
+
+## Development
+
+Run the desktop app:
+
+```bash
+npm install
+npm run start
+```
+
+The Electron shell starts with remote debugging enabled in development on `REMOTE_DEBUG_PORT` (default `9223`). That keeps the app attachable by `electron-mcp-server`.
+
+## Electron MCP Server
+
+Start the MCP server in a second terminal:
+
+```bash
+npm run mcp:start
+```
+
+Recommended local environment:
+
+```bash
+SECURITY_LEVEL=balanced
+REMOTE_DEBUG_PORT=9223
+```
+
+The packaged Electron MCP server scans ports `9222-9225`, so the default app port is already compatible. A typical flow is:
+
+1. Run `npm run start`
+2. Run `npm run mcp:start`
+3. Use Electron MCP tools against the live desktop window for screenshots, DOM inspection, and UI automation
+
+## Vite Template Notes
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 

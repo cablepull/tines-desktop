@@ -25,10 +25,12 @@ export default function Login({ onLogin }: LoginProps) {
   useEffect(() => {
     const loadProfiles = async () => {
       try {
-        const stored = await (window as any).electronAPI.getProfiles();
-        setProfiles(stored);
-        if (stored.length > 0) {
-          setSelectedProfile(stored[0].name);
+        if ((window as any).electronAPI) {
+          const stored = await (window as any).electronAPI.getProfiles();
+          setProfiles(stored);
+          if (stored.length > 0) {
+            setSelectedProfile(stored[0].name);
+          }
         }
       } catch (err) {
         console.error('Failed to load profiles', err);
@@ -46,7 +48,9 @@ export default function Login({ onLogin }: LoginProps) {
 
     if (selectedProfile === 'new') {
       const newProfile = { name: profileName, tenant, apiKey };
-      await (window as any).electronAPI.saveProfile(newProfile);
+      if ((window as any).electronAPI) {
+        await (window as any).electronAPI.saveProfile(newProfile);
+      }
     } else {
       const existing = profiles.find(p => p.name === selectedProfile);
       if (existing) {
@@ -62,10 +66,16 @@ export default function Login({ onLogin }: LoginProps) {
   };
 
   const handleDelete = async (name: string) => {
-    const updated = await (window as any).electronAPI.deleteProfile(name);
-    setProfiles(updated);
-    if (updated.length > 0) setSelectedProfile(updated[0].name);
-    else setSelectedProfile('new');
+    if ((window as any).electronAPI) {
+      const updated = await (window as any).electronAPI.deleteProfile(name);
+      setProfiles(updated);
+      if (updated.length > 0) setSelectedProfile(updated[0].name);
+      else setSelectedProfile('new');
+    } else {
+      const updated = profiles.filter(p => p.name !== name);
+      setProfiles(updated);
+      setSelectedProfile('new');
+    }
   };
 
   return (

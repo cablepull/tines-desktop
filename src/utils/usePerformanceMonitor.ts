@@ -1,5 +1,17 @@
 import { useCallback, useRef } from 'react';
 
+export interface TinesEvent {
+  id: number;
+  action_id: number;
+  created_at: string;
+  status?: string;
+  output?: any;
+  error?: string;
+  duration_ms?: number;
+  previous_event_ids?: number[];
+  story_run_guid?: string;
+}
+
 export interface PerformanceMetrics {
   name: string;
   duration: number;
@@ -31,7 +43,7 @@ export const usePerformanceMonitor = (componentName: string) => {
         duration: lastEntry.duration,
         startTime: lastEntry.startTime
       };
-    } catch (e) {
+    } catch (_e) {
       // Mark might be missing
       return null;
     }

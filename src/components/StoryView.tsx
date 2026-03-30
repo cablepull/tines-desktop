@@ -1,10 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useState, useMemo, useRef } from 'react';
-import { Configuration, ActionsApi } from 'tines-sdk';
-import type { Action } from 'tines-sdk';
+import { Configuration, ActionsApi, StoriesApi } from 'tines-sdk';
+import type { Action, Story } from 'tines-sdk';
 import { useLogger } from '../context/LogContext';
 import NodeInspector from './NodeInspector';
+import DebugInspector from './DebugInspector';
+import StoryLedger from './StoryLedger';
 import { jsPDF } from 'jspdf';
+import type { InvestigationRecord } from '../electron';
 import { usePerformanceMonitor } from '../utils/usePerformanceMonitor';
 import { 
   type SafetyTier, 
@@ -16,21 +19,34 @@ import {
 interface StoryViewProps {
   tenant: string;
   apiKey: string;
-  storyId: number;
+  storyContext: { storyId: number, mode: 'live' | 'test' | 'draft', draftId?: number };
+  focusActionId?: number | null;
   onBack: () => void;
 }
 
-export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryViewProps) {
+interface BoardNote {
+  id: number;
+  x: number;
+  y: number;
+  text: string;
+  color: string;
+}
+
+export default function StoryView({ tenant, apiKey, storyContext, focusActionId, onBack }: StoryViewProps) {
+  const { storyId } = storyContext;
   const [actions, setActions] = useState<Action[]>([]);
   const [loading, setLoading] = useState(true);
   const { addLog } = useLogger();
   const { startMeasure, endMeasure } = usePerformanceMonitor('StoryView');
 
-  // Create Action State
+  // Persistence State
+  const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'error'>('synced');
+  const [lastSaved, setLastSaved] = useState<Date | null>(new Date());
+
   const [actionName, setActionName] = useState('');
   const [actionType, setActionType] = useState('Agents::WebhookAgent');
   const [creating, setCreating] = useState(false);
-  const [viewMode, setViewMode] = useState<'canvas' | 'json' | 'safety'>('canvas');
+  const [viewMode, setViewMode] = useState<'canvas' | 'json' | 'safety' | 'debug' | 'ledger'>('canvas');
   const [zoom, setZoom] = useState(1);
   const [toolsCollapsed, setToolsCollapsed] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -41,56 +57,714 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
   const [searchOpen, setSearchOpen] = useState(false);
   const [highlightedNodeId, setHighlightedNodeId] = useState<number | null>(null);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [inspectedNode, setInspectedNode] = useState<Action | null>(null);
+  const [draggedNode, setDraggedNode] = useState<number | null>(null);
+  const [nodeDragOffset, setNodeDragOffset] = useState({ x: 0, y: 0 });
 
-  // Board Comments / Annotations
-  interface BoardNote { id: number; x: number; y: number; text: string; color: string; }
+  // Phase 38: Debug Trace State
+  const [eventMap, setEventMap] = useState<Map<number, any[]>>(new Map());
+  const [debugLoading, setDebugLoading] = useState(false);
+  const [debugNode, setDebugNode] = useState<Action | null>(null);
+  const [selectedRunGuid, setSelectedRunGuid] = useState<string | null>(null);
+  const [lastEventFetch, setLastEventFetch] = useState<Date | null>(null);
+  const [storyMetadata, setStoryMetadata] = useState<Story | null>(null);
+  const [hoveredEventId, setHoveredEventId] = useState<string | null>(null);
+  const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
+  const [executionPath, setExecutionPath] = useState<Set<number>>(new Set());
+  const [highlightedNodeIds, setHighlightedNodeIds] = useState<Set<number>>(new Set());
+  const [investigations, setInvestigations] = useState<InvestigationRecord[]>([]);
+  const [investigationName, setInvestigationName] = useState('');
+  const [investigationsOpen, setInvestigationsOpen] = useState(false);
+  const [savingInvestigation, setSavingInvestigation] = useState(false);
+  const [selectedInvestigationId, setSelectedInvestigationId] = useState<string | null>(null);
+
+  const normalizeRunGuid = (item: any) => item.story_run_guid || item.run_guid || item.execution_run_guid || null;
+  const hydrateCachedEvent = (evt: any) => ({
+    ...evt,
+    story_run_guid: normalizeRunGuid(evt),
+    run_guid: evt.run_guid || normalizeRunGuid(evt),
+  });
+  const hydrateCachedLog = (log: any) => ({
+    ...log,
+    story_run_guid: normalizeRunGuid(log),
+    run_guid: log.run_guid || normalizeRunGuid(log),
+  });
+
+  // Phase 47: Robust Error Detection
+  const isErrorEvent = (e: any) => {
+    if (e.status === 'error' || e.error) return true;
+    const p = e.output || e.payload;
+    if (!p) return false;
+    
+    const status = p.status || (p.body && p.body.status) || (p.contents && p.contents.status);
+    if (status) {
+      const s = Number(status);
+      if (s >= 500) return true;
+    }
+    // Fallback: check if the error message itself contains a 5xx code
+    if (e.error && /5\d{2}/.test(String(e.error))) return true;
+    return false;
+  };
+
+  const isWarningEvent = (e: any) => {
+    if (e.status === 'warning') return true;
+    const p = e.output || e.payload;
+    if (!p) return false;
+
+    const status = p.status || (p.body && p.body.status) || (p.contents && p.contents.status);
+    if (status) {
+      const s = Number(status);
+      if (s >= 400 && s < 500) return true;
+    }
+    // Fallback: check if the error message itself contains a 4xx code
+    if (e.error && /4\d{2}/.test(String(e.error))) return true;
+    return false;
+  };
+
+  // Helper: classify the health of a node based on its events
+  const getNodeHealth = (actionId: number): 'ok' | 'error' | 'warning' | 'none' => {
+    const act = actions.find(a => a.id === actionId);
+    if (!act) return 'none';
+
+    // Phase 48: Prioritize official "Not Working" signals from inclusive live activity
+    if ((act as any).not_working || (act as any).last_error_log_at) return 'error';
+    if ((act as any).pending_action_runs_count > 5) return 'warning';
+
+    let events = eventMap.get(actionId);
+    if (!events || events.length === 0) return 'none';
+    
+    // Run Isolation [D2]
+    if (selectedRunGuid) {
+      events = events.filter(e => e.story_run_guid === selectedRunGuid);
+    }
+    
+    if (!events || events.length === 0) return 'none';
+    const latest = events[0];
+    if (isErrorEvent(latest)) return 'error';
+    if (isWarningEvent(latest)) return 'warning';
+    return 'ok';
+  };
+
+  // Phase 38: Pre-compute debug stats (must use useMemo, not IIFE in JSX)
+
+  const debugStats = useMemo(() => {
+    let totalEvents = 0, okEvents = 0, errorEvents = 0, warningEvents = 0;
+    let firstErrorActionId: number | undefined;
+    const runGuids = new Set<string>();
+
+    eventMap.forEach((evts, actionId) => {
+      evts.forEach((e: any) => {
+        if (e.story_run_guid) runGuids.add(e.story_run_guid);
+        if (selectedRunGuid && e.story_run_guid !== selectedRunGuid) return;
+
+        totalEvents++;
+        if (isErrorEvent(e)) { 
+          errorEvents++; 
+          if (firstErrorActionId == null) firstErrorActionId = actionId;
+        }
+        else if (isWarningEvent(e)) warningEvents++;
+        else okEvents++;
+      });
+    });
+
+    const failingActions = actions.filter(a => {
+        const h = getNodeHealth(a.id!);
+        return h === 'error';
+    }).length;
+    
+    const warningActions = actions.filter(a => {
+        const h = getNodeHealth(a.id!);
+        return h === 'warning';
+    }).length;
+
+    const { pending_action_runs_count = 0 } = (storyMetadata as any) || {};
+    
+    return { 
+      totalEvents, 
+      okEvents, 
+      errorEvents, 
+      warningEvents, 
+      failingActions,
+      warningActions,
+      firstErrorActionId, 
+      runGuids: Array.from(runGuids), 
+      pendingRuns: pending_action_runs_count 
+    };
+  }, [eventMap, selectedRunGuid, storyMetadata, actions, isErrorEvent, isWarningEvent, getNodeHealth]);
+
   const [notes, setNotes] = useState<BoardNote[]>([]);
   const [nextNoteId, setNextNoteId] = useState(1);
   const [editingNoteId, setEditingNoteId] = useState<number | null>(null);
   const [draggedNoteId, setDraggedNoteId] = useState<number | null>(null);
   const [noteDragOffset, setNoteDragOffset] = useState({ x: 0, y: 0 });
 
-  const addNote = () => {
-    const containerW = canvasRef.current?.clientWidth || 800;
-    const containerH = canvasRef.current?.clientHeight || 600;
-    // Place the note in the center of the current viewport
-    const cx = (-pan.x + containerW / 2) / zoom;
-    const cy = (-pan.y + containerH / 2) / zoom;
-    setNotes(prev => [...prev, { id: nextNoteId, x: cx - 90, y: cy - 40, text: 'New note...', color: '#fbbf24' }]);
-    setNextNoteId(n => n + 1);
-    addLog('INFO', `Added board note #${nextNoteId}`);
+  // Constants
+  const NODE_W = 240, NODE_H = 120;
+
+  // Connection State
+  const [connectingFromId, setConnectingFromId] = useState<number | null>(null);
+  const [dragMousePos, setDragMousePos] = useState({ x: 0, y: 0 });
+
+  // Phase 28: Multi-Tier Safeguards
+  const [safetyLock, setSafetyLock] = useState(true);
+
+  // --- API / Infrastructure ---
+
+  const actionsApi = useMemo(() => {
+    const basePath = tenant.startsWith('http') ? tenant : `https://${tenant}`;
+    const config = new Configuration({ basePath, accessToken: apiKey });
+    return new ActionsApi(config);
+  }, [tenant, apiKey]);
+
+  const storiesApi = useMemo(() => {
+    const basePath = tenant.startsWith('http') ? tenant : `https://${tenant}`;
+    return new StoriesApi(new Configuration({ basePath, accessToken: apiKey }));
+  }, [tenant, apiKey]);
+
+  const fetchStoryMetadata = async () => {
+    try {
+      const { mode, draftId } = storyContext;
+      const basePath = tenant.startsWith('http') ? tenant : `https://${tenant}`;
+      
+      let url = `${basePath}/api/v1/stories/${storyId}?include_live_activity=true`;
+      if (mode === 'test') url += '&story_mode=TEST';
+      if (mode === 'draft') {
+        url += '&story_mode=BUILD';
+        if (draftId) url += `&draft_id=${draftId}`;
+      }
+
+      const resp = await fetch(url, { headers: { 'Authorization': `Bearer ${apiKey}` } });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const meta = await resp.json();
+
+      setStoryMetadata(meta);
+      if (meta.locked) {
+        addLog('INFO', 'Story is locked on server');
+      }
+    } catch (err: any) {
+      addLog('ERROR', 'Failed to fetch story metadata', { error: err.message });
+    }
   };
 
-  // Resolve safety with overrides applied
+  const toggleServerLock = async () => {
+    if (!storyMetadata || !storyMetadata.id) return;
+    const newStatus = !storyMetadata.locked;
+    addLog('NETWORK', `${newStatus ? 'Locking' : 'Unlocking'} story on server...`);
+    setSyncStatus('syncing');
+    try {
+      await storiesApi.updateStory({
+        storyId: storyMetadata.id,
+        storyUpdateRequest: { locked: newStatus }
+      });
+      setSyncStatus('synced');
+      setLastSaved(new Date());
+      fetchStoryMetadata(); // Refresh status
+    } catch (err: any) {
+      setSyncStatus('error');
+      addLog('ERROR', 'Failed to update server lock', { error: err.message });
+    }
+  };
+
+  const fetchActions = async () => {
+    startMeasure('StoryLoad');
+    try {
+      setLoading(true);
+      const { mode, draftId } = storyContext;
+      addLog('NETWORK', `Fetching Story ${storyId} actions (Mode: ${mode})...`);
+      
+      const basePath = tenant.startsWith('http') ? tenant : `https://${tenant}`;
+      let url = `${basePath}/api/v1/actions?story_id=${storyId}&per_page=500&include_live_activity=true`;
+      if (mode === 'test') url += '&story_mode=TEST';
+      if (mode === 'draft') {
+        url += '&story_mode=BUILD';
+        if (draftId) url += `&draft_id=${draftId}`;
+      }
+
+      const resp = await fetch(url, { headers: { 'Authorization': `Bearer ${apiKey}` } });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const res = await resp.json();
+      
+      const rawActions = res.actions || res.agents || (Array.isArray(res) ? res : []);
+      addLog('DEBUG', `Hydrated ${rawActions.length} actions from API response`);
+      setActions(rawActions);
+      endMeasure('StoryLoad');
+      
+      if (rawActions.length > 0) {
+        setTimeout(() => recenterCanvas(rawActions), 100);
+      }
+    } catch (err: any) {
+      addLog('ERROR', 'Failed to fetch actions', { error: err.message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { 
+    fetchActions(); 
+    fetchStoryMetadata();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storyId, storyContext.mode, storyContext.draftId, tenant, apiKey, storiesApi]);
+
+  const loadInvestigations = async () => {
+    if (!window.electronAPI) return;
+    try {
+      const records = await window.electronAPI.dbListInvestigations({ storyId: Number(storyId), limit: 20 });
+      setInvestigations(records);
+      setSelectedInvestigationId((current) => current && records.find((item) => item.id === current) ? current : records[0]?.id || null);
+    } catch (err) {
+      console.error('DuckDB: Failed to load investigations', err);
+    }
+  };
+
+  // Phase 38: Fetch all events for the story to assess health
+  useEffect(() => {
+    // Clear maps on story switch to ensure irrelevance is avoided
+    setEventMap(new Map());
+    setActionLogMap(new Map());
+    fetchEvents(true);
+    loadInvestigations();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storyId]);
+
+  // Phase 38: Fetch Story Events for Debug Mode
+  const fetchEvents = async (forceRefresh = false) => {
+    setDebugLoading(true);
+    
+    // Phase 53: Try local DuckDB first if not forcing refresh
+    if (!forceRefresh && window.electronAPI) {
+      try {
+        const localEvents = await window.electronAPI.dbGetEvents({ storyId: Number(storyId) });
+        if (localEvents && localEvents.length > 0) {
+          addLog('DEBUG', `Loaded ${localEvents.length} events from local DuckDB cache`);
+          const map = new Map<number, any[]>();
+          localEvents.forEach((rawEvt: any) => {
+            const evt = hydrateCachedEvent(rawEvt);
+            const rawAid = evt.action_id || evt.agent_id;
+            if (rawAid != null) {
+              const aid = Number(rawAid);
+              if (!map.has(aid)) map.set(aid, []);
+              map.get(aid)!.push(evt);
+            }
+          });
+          setEventMap(map);
+          setDebugLoading(false);
+          return;
+        }
+      } catch (e) {
+        console.error('DuckDB: Failed to load events', e);
+      }
+    }
+
+    addLog('NETWORK', `Fetching execution events for Story ${storyId} from Tines...`);
+    const basePath = tenant.startsWith('http') ? tenant : `https://${tenant}`;
+    try {
+      const resp = await fetch(
+        `${basePath}/api/v1/events?story_id=${storyId}&per_page=500`,
+        { headers: { 'Authorization': `Bearer ${apiKey}` } }
+      );
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const events: any[] = data.events || data.agents || (Array.isArray(data) ? data : []);
+
+      // Group by action_id
+      const map = new Map<number, any[]>();
+      events.forEach(evt => {
+        const rawAid = evt.action_id || evt.agent_id;
+        if (rawAid != null) {
+          const aid = Number(rawAid);
+          if (!map.has(aid)) map.set(aid, []);
+          map.get(aid)!.push(evt);
+        }
+      });
+      setEventMap(map);
+      setLastEventFetch(new Date());
+      addLog('SUCCESS', `Loaded ${events.length} events across ${map.size} actions`);
+
+      // Phase 53/55: Persist to DuckDB with traceability
+      if (window.electronAPI && events.length > 0) {
+        window.electronAPI.dbSaveEvents(events.map(e => ({ 
+          ...e, 
+          story_id: Number(storyId),
+          run_guid: e.story_run_guid || e.execution_run_guid || null 
+        })));
+      }
+    } catch (err: any) {
+      addLog('ERROR', `Event fetch failed: ${err.message}`);
+    }
+    setDebugLoading(false);
+  };
+
+  // Phase 41: Fetch Story Logs [E2]
+  // Removed fetchStoryLogs as it uses a deprecated/unavailable /api/v1/logs endpoint
+  // that was causing 404 errors. Execution traces are now fully handled via fetchEvents.
+
+  useEffect(() => {
+    if (viewMode !== 'debug') return;
+    const interval = setInterval(() => {
+      fetchEvents();
+    }, 5000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode, storyId, tenant, apiKey]);
+
+  // Phase 49: Fetch Action Logs for suspect actions [E2]
+  const [actionLogMap, setActionLogMap] = useState<Map<number, any[]>>(new Map());
+  const fetchActionLogs = async (actionId: number, forceRefresh = false) => {
+    // Phase 53: Try local DuckDB first
+    if (!forceRefresh && window.electronAPI) {
+        try {
+            const localLogs = await window.electronAPI.dbGetLogs({ storyId: Number(storyId), actionId });
+            if (localLogs && localLogs.length > 0) {
+                addLog('DEBUG', `Loaded ${localLogs.length} logs from DuckDB cache for action ${actionId}`);
+                setActionLogMap(prev => {
+                    const next = new Map(prev);
+                    next.set(actionId, localLogs.map(hydrateCachedLog));
+                    return next;
+                });
+                return;
+            }
+        } catch (e) {
+            console.error('DuckDB: Failed to load logs', e);
+        }
+    }
+
+    if (!forceRefresh && actionLogMap.has(actionId)) {
+      addLog('DEBUG', `Using memory-cached logs for action ${actionId}`);
+      return;
+    }
+    const basePath = tenant.startsWith('http') ? tenant : `https://${tenant}`;
+    try {
+      const resp = await fetch(
+        `${basePath}/api/v1/actions/${actionId}/logs?per_page=50`,
+        { headers: { 'Authorization': `Bearer ${apiKey}` } }
+      );
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const logs = data.logs || data;
+      const logArray = Array.isArray(logs) ? logs : [];
+      
+      setActionLogMap(prev => {
+        const next = new Map(prev);
+        next.set(actionId, logArray);
+        return next;
+      });
+
+      // Phase 53/55: Persist to DuckDB with traceability
+      if (window.electronAPI && logArray.length > 0) {
+        window.electronAPI.dbSaveLogs(logArray.map((l: any) => ({ 
+          ...l, 
+          story_id: Number(storyId), 
+          action_id: actionId,
+          run_guid: l.story_run_guid || l.execution_run_guid || null
+        })));
+      }
+    } catch (err: any) {
+       addLog('ERROR', `Failed to fetch logs for Action ${actionId}: ${err.message}`);
+    }
+  };
+
+  const captureInvestigationScreenshot = async () => {
+    if (!canvasRef.current) return null;
+    try {
+      const { default: html2canvas } = await import('html2canvas');
+      const canvas = await html2canvas(canvasRef.current, {
+        backgroundColor: '#0f172a',
+        scale: 1,
+        logging: false,
+      });
+      return canvas.toDataURL('image/png');
+    } catch (err) {
+      console.error('Investigation: Screenshot capture failed', err);
+      return null;
+    }
+  };
+
+  const applyInvestigation = async (investigation: InvestigationRecord) => {
+    setInvestigationName(investigation.name || '');
+    setSelectedInvestigationId(investigation.id || null);
+    setSelectedRunGuid(investigation.selected_run_guid || null);
+    setSelectedEventId(investigation.selected_event_id || null);
+    setNotes(investigation.notes || []);
+    setHighlightedNodeIds(new Set(investigation.highlighted_node_ids || []));
+    setExecutionPath(new Set());
+
+    if (investigation.debug_action_id) {
+      const targetAction = actions.find((action) => action.id === investigation.debug_action_id);
+      if (targetAction) {
+        setViewMode('debug');
+        setDebugNode(targetAction);
+        await fetchActionLogs(targetAction.id!, true);
+      }
+    } else {
+      setDebugNode(null);
+    }
+  };
+
+  const saveInvestigation = async () => {
+    if (!window.electronAPI) return;
+    setSavingInvestigation(true);
+    try {
+      const screenshotDataUrl = await captureInvestigationScreenshot();
+      const payload: InvestigationRecord = {
+        id: selectedInvestigationId || undefined,
+        name: investigationName.trim() || `Story ${storyId} @ ${new Date().toLocaleString()}`,
+        tenant,
+        story_id: Number(storyId),
+        mode: storyContext.mode,
+        draft_id: storyContext.draftId,
+        screenshot_data_url: screenshotDataUrl,
+        selected_run_guid: selectedRunGuid,
+        selected_event_id: selectedEventId,
+        debug_action_id: debugNode?.id || null,
+        highlighted_node_ids: Array.from(highlightedNodeIds),
+        notes,
+      };
+
+      const saved = await window.electronAPI.dbSaveInvestigation(payload);
+      setInvestigationName(saved.name);
+      setSelectedInvestigationId(saved.id || null);
+      await loadInvestigations();
+      addLog('SUCCESS', `Saved investigation "${saved.name}" locally`);
+    } catch (err: any) {
+      addLog('ERROR', 'Failed to save investigation', { error: err.message || String(err) });
+    } finally {
+      setSavingInvestigation(false);
+    }
+  };
+
+  const deleteInvestigation = async (id: string) => {
+    if (!window.electronAPI) return;
+    try {
+      await window.electronAPI.dbDeleteInvestigation(id);
+      if (selectedInvestigationId === id) {
+        setSelectedInvestigationId(null);
+      }
+      await loadInvestigations();
+    } catch (err) {
+      console.error('DuckDB: Failed to delete investigation', err);
+    }
+  };
+
+  // Phase 46: Trace Lineage Navigator
+  const handleNavigateToEvent = (eventId: number) => {
+    // Search for the event across the entire map
+    let targetEvent: any = null;
+    let targetActionId: number | null = null;
+
+    for (const [aid, evts] of eventMap.entries()) {
+      const found = evts.find(e => e.id === eventId);
+      if (found) {
+        targetEvent = found;
+        targetActionId = aid;
+        break;
+      }
+    }
+
+    if (targetEvent && targetActionId != null) {
+      const action = actions.find(a => a.id === targetActionId);
+      if (action) {
+        setDebugNode(action);
+        setSelectedEventId(eventId);
+        
+        // Calculate the full lineage for highlighting
+        const path = new Set<number>();
+        const resolveLineage = (evtId: number) => {
+          for (const evts of eventMap.values()) {
+            const e = evts.find(ev => ev.id === evtId);
+            if (e) {
+              path.add(Number(e.action_id || e.agent_id));
+              if (e.previous_event_ids) {
+                e.previous_event_ids.forEach((id: number) => resolveLineage(id));
+              }
+              break;
+            }
+          }
+        };
+        resolveLineage(eventId);
+        setExecutionPath(path);
+      }
+    }
+  };
+
+  // Causal Lineage Tracing [D3+46] - Highlight both Hovered and Selected traces
+  const causalNodeIds = useMemo(() => {
+    const nodes = new Set<number>();
+    const events = new Set<number>();
+    
+    // 1. Add current executionPath (Selection)
+    executionPath.forEach(id => nodes.add(id));
+
+    // 2. Add hovered lineage (Hover)
+    if (hoveredEventId) {
+      const allEvents = Array.from(eventMap.values()).flat();
+      const traverse = (id: number) => {
+        if (events.has(id)) return;
+        events.add(id);
+        const evt = allEvents.find(e => e.id === id);
+        if (evt) {
+          nodes.add(Number(evt.action_id || evt.agent_id));
+          if (evt.previous_event_ids) {
+            evt.previous_event_ids.forEach((pid: number) => traverse(pid));
+          }
+        }
+      };
+      traverse(Number(hoveredEventId));
+    }
+    
+    return nodes;
+  }, [hoveredEventId, eventMap, executionPath]);
+
+  const syncNodeCoordinates = async (targetId: number) => {
+     const updatedAct = actions.find(a => a.id === targetId);
+     if (updatedAct) {
+       addLog('NETWORK', `Saving coordinates for ${updatedAct.name}`);
+       setSyncStatus('syncing');
+       try {
+         await actionsApi.updateAction({ 
+           actionId: updatedAct.id!, 
+           actionUpdateRequest: { position: updatedAct.position } 
+         });
+         setSyncStatus('synced');
+         setLastSaved(new Date());
+       } catch(err: any) {
+         setSyncStatus('error');
+         addLog('ERROR', 'Coordinate sync failed', { error: err.message });
+       }
+     }
+  };
+
+  const finalizeConnection = async (targetId: number) => {
+    if (safetyLock) return;
+    if (connectingFromId === null || connectingFromId === targetId) {
+      setConnectingFromId(null);
+      return;
+    }
+    const targetAct = actions.find(a => a.id === targetId);
+    if (!targetAct) return;
+    if (targetAct.sources && (targetAct.sources as any).includes(connectingFromId)) {
+      setConnectingFromId(null);
+      return;
+    }
+
+    addLog('NETWORK', `Linking ${connectingFromId} -> ${targetId}`);
+    setSyncStatus('syncing');
+    try {
+      const newSources = [...(targetAct.sources || []), connectingFromId];
+      await actionsApi.updateAction({ 
+        actionId: targetId, 
+        actionUpdateRequest: { sourceIds: newSources as any } 
+      });
+      setSyncStatus('synced');
+      setLastSaved(new Date());
+      fetchActions();
+    } catch (err: any) {
+      setSyncStatus('error');
+      addLog('ERROR', 'Link creation failed', { error: err.message });
+    } finally {
+      setConnectingFromId(null);
+    }
+  };
+
+  const deleteConnection = async (sourceId: number, targetId: number) => {
+    if (safetyLock) return;
+    const targetAct = actions.find(a => a.id === targetId);
+    if (!targetAct || !targetAct.sources) return;
+
+    addLog('NETWORK', `Breaking connection ${sourceId} -X-> ${targetId}`);
+    setSyncStatus('syncing');
+    try {
+      const newSources = targetAct.sources.filter(s => s !== sourceId);
+      await actionsApi.updateAction({ 
+        actionId: targetId, 
+        actionUpdateRequest: { sourceIds: newSources as any } 
+      });
+      setSyncStatus('synced');
+      setLastSaved(new Date());
+      fetchActions();
+    } catch (err: any) {
+      setSyncStatus('error');
+      addLog('ERROR', 'Link removal failed', { error: err.message });
+    }
+  };
+
+  const handleDeleteAction = async (e: React.MouseEvent, id: number, name: string) => {
+    if (safetyLock) return;
+    e.stopPropagation();
+    if (!window.confirm(`Destruct ${name}?`)) return;
+    addLog('NETWORK', `Deleting action: ${name}`);
+    setSyncStatus('syncing');
+    try {
+      const basePath = tenant.startsWith('http') ? tenant : `https://${tenant}`;
+      await fetch(`${basePath}/api/v1/actions/${id}`, {
+        method: 'DELETE',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+        }
+      });
+      setSyncStatus('synced');
+      setLastSaved(new Date());
+      fetchActions();
+    } catch(err: any) {
+      setSyncStatus('error');
+      addLog('ERROR', `Deletion failed`, { error: err.message });
+    }
+  };
+
+  const handleCreateAction = async (e: React.FormEvent) => {
+    if (safetyLock) return;
+    e.preventDefault();
+    if (!actionName) return;
+    setCreating(true);
+    setSyncStatus('syncing');
+    try {
+      await actionsApi.createAction({
+        actionCreateRequest: {
+          name: actionName,
+          type: actionType as any,
+          storyId: storyId,
+          position: { x: (Math.random() * 400 + 100), y: (Math.random() * 300 + 100) } as any,
+          options: {},
+        }
+      });
+      setSyncStatus('synced');
+      setLastSaved(new Date());
+      setActionName('');
+      fetchActions();
+    } catch (err: any) {
+      setSyncStatus('error');
+      addLog('ERROR', `Creation failed`, { error: err.message });
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  // --- Canvas Interaction Handlers ---
+
   const getSafety = (act: any): SafetyInfo => getEffectiveSafety(act, tierOverrides);
 
-  // Infinite Canvas & Node Dragging State
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const [inspectedNode, setInspectedNode] = useState<Action | null>(null);
-  
-  const [draggedNode, setDraggedNode] = useState<number | null>(null);
-  const [nodeDragOffset, setNodeDragOffset] = useState({ x: 0, y: 0 });
-
   const handleMouseDown = (e: React.MouseEvent) => {
-    // Only drag canvas if not clicking cards or buttons
     if ((e.target as HTMLElement).closest('.nondraggable')) return;
     setIsDragging(true);
     setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
   };
 
   const handleNodeMouseDown = (e: React.MouseEvent, actionId: number) => {
-    // Prevent the canvas from dragging!
+    if (safetyLock) return;
     e.stopPropagation();
-    // Don't drag if clicking the delete button
     if ((e.target as HTMLElement).tagName.toLowerCase() === 'button') return;
     setDraggedNode(actionId);
     setNodeDragOffset({ x: e.clientX, y: e.clientY });
   };
 
-  const handleMouseMove = (e: React.MouseEvent) => {
-    // Note dragging
+  const handleGlobalMouseMove = (e: React.MouseEvent) => {
+    if (connectingFromId !== null) {
+      setDragMousePos({ x: e.clientX, y: e.clientY });
+      return;
+    }
     if (draggedNoteId !== null) {
       if (e.buttons !== 1) { setDraggedNoteId(null); return; }
       const nx = e.clientX / zoom - noteDragOffset.x;
@@ -98,7 +772,6 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
       setNotes(prev => prev.map(n => n.id === draggedNoteId ? { ...n, x: nx, y: ny } : n));
       return;
     }
-
     if (draggedNode) {
       if (e.buttons !== 1) { handleGlobalMouseUp(); return; }
       const tempActions = [...actions];
@@ -106,7 +779,6 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
       if (actIndex >= 0) {
          const deltaX = e.clientX - nodeDragOffset.x;
          const deltaY = e.clientY - nodeDragOffset.y;
-         
          tempActions[actIndex].position = {
             x: (tempActions[actIndex].position?.x || 0) + deltaX,
             y: (tempActions[actIndex].position?.y || 0) + deltaY
@@ -116,31 +788,15 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
       }
       return;
     }
-
     if (!isDragging) return;
     if (e.buttons !== 1) { setIsDragging(false); return; }
     setPan({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
   };
 
-  const syncNodeCoordinates = async (targetId: number) => {
-     const updatedAct = actions.find(a => a.id === targetId);
-     if (updatedAct) {
-       addLog('NETWORK', `Saving new coordinates for ${updatedAct.name}`);
-       try {
-         await actionsApi.updateAction({ 
-           actionId: updatedAct.id!, 
-           actionUpdateRequest: { position: updatedAct.position } 
-         });
-         addLog('SUCCESS', `Synchronized node matrix to Cloud!`);
-       } catch(err: any) {
-         addLog('ERROR', 'Failed to update coordinate layout', { error: err.message });
-       }
-     }
-  };
-
   const handleGlobalMouseUp = () => {
     setIsDragging(false);
-    if (draggedNoteId !== null) { setDraggedNoteId(null); }
+    setDraggedNoteId(null);
+    if (connectingFromId !== null) setConnectingFromId(null);
     if (draggedNode) {
        syncNodeCoordinates(draggedNode);
        setDraggedNode(null);
@@ -160,125 +816,48 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
     setInspectedNode(act);
   };
 
-  const handleDeleteAction = async (e: React.MouseEvent, id: number, name: string) => {
-    e.stopPropagation();
-    if (!window.confirm(`Are you sure you want to destruct ${name}?`)) return;
-    addLog('NETWORK', `Deleting logic constraint: ${name}`);
-    try {
-      // Fallback: The derived OpenAPI spec currently lacks a delete proxy, manually route REST request
-      await fetch(tenant.startsWith('http') ? `${tenant}/api/v1/actions/${id}` : `https://${tenant}/api/v1/actions/${id}`, {
-        method: 'DELETE',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-        }
-      });
-      addLog('SUCCESS', `Removed ${name} from Graph.`);
-      fetchActions();
-    } catch(err: any) {
-      addLog('ERROR', `Failed deletion schema`, { error: err.message });
-    }
+  const addNote = () => {
+    const containerW = canvasRef.current?.clientWidth || 800;
+    const containerH = canvasRef.current?.clientHeight || 600;
+    const cx = (-pan.x + containerW / 2) / zoom;
+    const cy = (-pan.y + containerH / 2) / zoom;
+    setNotes(prev => [...prev, { id: nextNoteId, x: cx - 90, y: cy - 40, text: 'New note...', color: '#fbbf24' }]);
+    setNextNoteId(n => n + 1);
   };
 
-  const actionsApi = useMemo(() => {
-    const basePath = tenant.startsWith('http') ? tenant : `https://${tenant}`;
-    const config = new Configuration({ basePath, apiKey });
-    return new ActionsApi(config);
-  }, [tenant, apiKey]);
+  // --- Export / Layout Handlers ---
 
-  const fetchActions = async () => {
-    startMeasure('StoryLoad');
-    try {
-      setLoading(true);
-      const basePath = tenant.startsWith('http') ? tenant : `https://${tenant}`;
-      let rawActions = null;
-
-      addLog('NETWORK', `Beginning Environment Waterfall Fetch for Story ${storyId}`);
-      
-      // Tines dynamically categorizes Actions into three strict isolated environments:
-      // BUILD (The Editor), TEST (Legacy editor), and LIVE (Published execution)
-      // If we attempt to query the wrong environment, Tines accurately securely returns 0.
-      for (const mode of ['BUILD', 'TEST', 'LIVE', undefined]) {
-         addLog('NETWORK', `Probing Environment plane: ${mode || 'DEFAULT'}...`);
-         
-         const url = mode 
-            ? `${basePath}/api/v1/actions?story_id=${storyId}&story_mode=${mode}&per_page=500`
-            : `${basePath}/api/v1/actions?story_id=${storyId}&per_page=500`;
-
-         const actRes = await fetch(url, { headers: { 'Authorization': `Bearer ${apiKey}` } });
-         
-         if (actRes.ok) {
-            const actData = await actRes.json();
-            const extracted = actData.actions || actData.agents || [];
-            if (extracted.length > 0) {
-                addLog('SUCCESS', `Successfully extracted ${extracted.length} actions from the ${mode || 'DEFAULT'} plane!`);
-                rawActions = extracted;
-                break;
-            }
-         }
-      }
-
-      if (!rawActions) rawActions = [];
-
-      setActions(rawActions);
-      const metrics = endMeasure('StoryLoad');
-      if (metrics) addLog('DEBUG', `Story Load Time: ${metrics.duration.toFixed(2)}ms`);
-
-      if (rawActions.length === 0) {
-         addLog('WARNING', `All environments yielded 0 actions! The Story is genuinely empty or access is fundamentally restricted.`);
-      }
-
-    } catch (err: any) {
-      addLog('ERROR', 'Failed to fetch actions', { error: err.message });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchActions();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [actionsApi, storyId]);
-
-  // Viewport Auto-Centering: Calculate bounding box center and offset to canvas center
   const recenterCanvas = (targetActions = actions) => {
-    startMeasure('AutoLayout');
     if (targetActions.length === 0) return;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     targetActions.forEach((a: any) => {
-      const ax = a.position?.x || 0;
-      const ay = a.position?.y || 0;
+      const ax = (a.position as any)?.x ?? (a.position as any)?.X ?? 0;
+      const ay = (a.position as any)?.y ?? (a.position as any)?.Y ?? 0;
       if (ax < minX) minX = ax;
       if (ay < minY) minY = ay;
-      if (ax + 240 > maxX) maxX = ax + 240; // node width
-      if (ay + 100 > maxY) maxY = ay + 100; // node height
+      if (ax + 240 > maxX) maxX = ax + 240;
+      if (ay + 120 > maxY) maxY = ay + 120;
     });
     const graphW = maxX - minX;
     const graphH = maxY - minY;
     const containerW = canvasRef.current?.clientWidth || 800;
     const containerH = canvasRef.current?.clientHeight || 600;
-    // Calculate zoom to fit if graph is larger than container
     const fitZoom = Math.min(containerW / (graphW + 100), containerH / (graphH + 100), 1);
     const newZoom = Math.max(fitZoom, 0.15);
-    // Center the graph in the container
     const offsetX = (containerW / newZoom - graphW) / 2 - minX;
     const offsetY = (containerH / newZoom - graphH) / 2 - minY;
     setZoom(newZoom);
     setPan({ x: offsetX * newZoom, y: offsetY * newZoom });
-    const metrics = endMeasure('AutoLayout');
-    if (metrics) addLog('DEBUG', `Auto-Layout Latency: ${metrics.duration.toFixed(2)}ms`);
-    addLog('INFO', `Centered ${targetActions.length} nodes (zoom: ${Math.round(newZoom*100)}%)`);
   };
 
-  // Fly-to-node: pan + zoom to center a specific node
   const flyToNode = (actionId: number) => {
     const act = actions.find(a => a.id === actionId);
     if (!act) return;
     const containerW = canvasRef.current?.clientWidth || 800;
     const containerH = canvasRef.current?.clientHeight || 600;
     const targetZoom = 1.2;
-    const nx = act.position?.x || 0;
-    const ny = act.position?.y || 0;
+    const nx = (act.position as any)?.x ?? (act.position as any)?.X ?? 0;
+    const ny = (act.position as any)?.y ?? (act.position as any)?.Y ?? 0;
     const offsetX = containerW / 2 - (nx + 240 / 2) * targetZoom;
     const offsetY = containerH / 2 - (ny + 120 / 2) * targetZoom;
     setZoom(targetZoom);
@@ -287,29 +866,20 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
     setInspectedNode(act);
     setSearchOpen(false);
     setCanvasSearch('');
-    addLog('INFO', `Flying to node: ${act.name}`);
-    // Clear highlight after 3 seconds
     setTimeout(() => setHighlightedNodeId(null), 3000);
   };
 
-  // Phase 13: Topological Auto-Layout (de-overlap)
-  const NODE_W = 240, NODE_H = 120, GAP_X = 60, GAP_Y = 50;
   const autoLayout = () => {
     if (actions.length === 0) return;
-    // Build adjacency: find depth of each node via BFS from roots
+    const NODE_W = 240, NODE_H = 120, GAP_X = 60, GAP_Y = 50;
     const childMap = new Map<number, number[]>();
-    const parentSet = new Set<number>();
     actions.forEach(a => {
       if (Array.isArray(a.sources)) {
-        a.sources.forEach((sid: any) => {
-          parentSet.add(sid);
-          childMap.set(sid, [...(childMap.get(sid) || []), a.id!]);
-        });
+        a.sources.forEach((sid: any) => childMap.set(sid, [...(childMap.get(sid) || []), a.id!]));
       }
     });
     const roots = actions.filter(a => !a.sources || (a.sources as any[]).length === 0).map(a => a.id!);
     if (roots.length === 0) roots.push(actions[0].id!);
-
     const depth = new Map<number, number>();
     const queue = [...roots];
     roots.forEach(r => depth.set(r, 0));
@@ -323,18 +893,13 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
         }
       });
     }
-    // Assign unvisited nodes to max depth + 1
     const maxDepth = Math.max(...Array.from(depth.values()), 0);
     actions.forEach(a => { if (!depth.has(a.id!)) depth.set(a.id!, maxDepth + 1); });
-
-    // Group by depth row
     const rows = new Map<number, number[]>();
     actions.forEach(a => {
       const d = depth.get(a.id!) || 0;
       rows.set(d, [...(rows.get(d) || []), a.id!]);
     });
-
-    // Position: each row top-to-bottom, nodes left-to-right within row
     const newActions = [...actions];
     const sortedRows = Array.from(rows.keys()).sort((a, b) => a - b);
     sortedRows.forEach((rowIdx, ri) => {
@@ -349,30 +914,26 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
       });
     });
     setActions(newActions);
-    addLog('SUCCESS', `Auto-layout: ${sortedRows.length} rows, ${actions.length} nodes repositioned`);
     setTimeout(recenterCanvas, 50);
   };
 
-  // Phase 13: Grid overlay computation
   const getGridInfo = () => {
+    const NODE_W = 240, NODE_H = 120;
     if (actions.length === 0) return { cells: [], cols: 0, rows: 0, minX: 0, minY: 0, cellW: 0, cellH: 0 };
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     actions.forEach((a: any) => {
-      const ax = a.position?.x || 0;
-      const ay = a.position?.y || 0;
-      if (ax < minX) minX = ax;
-      if (ay < minY) minY = ay;
-      if (ax + NODE_W > maxX) maxX = ax + NODE_W;
-      if (ay + NODE_H > maxY) maxY = ay + NODE_H;
+      minX = Math.min(minX, a.position?.x || 0);
+      minY = Math.min(minY, a.position?.y || 0);
+      maxX = Math.max(maxX, (a.position?.x || 0) + NODE_W);
+      maxY = Math.max(maxY, (a.position?.y || 0) + NODE_H);
     });
     const pad = 40;
     minX -= pad; minY -= pad; maxX += pad; maxY += pad;
-    // Each cell should be ~600x400 (readable at ~80% zoom on letter paper)
     const cellW = 600, cellH = 450;
     const cols = Math.max(1, Math.ceil((maxX - minX) / cellW));
     const rows = Math.max(1, Math.ceil((maxY - minY) / cellH));
-    const cells: { label: string; x: number; y: number; w: number; h: number; page: number }[] = [];
-    let page = 2; // page 1 is overview
+    const cells: any[] = [];
+    let page = 2;
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         cells.push({ label: `${r+1}-${c+1}`, x: minX + c * cellW, y: minY + r * cellH, w: cellW, h: cellH, page: page++ });
@@ -381,10 +942,7 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
     return { cells, cols, rows, minX, minY, cellW, cellH };
   };
 
-  // Phase 13: SVG Export
   const exportSVG = () => {
-    if (actions.length === 0) return;
-    const grid = getGridInfo();
     const pad = 60;
     let gMinX = Infinity, gMinY = Infinity, gMaxX = -Infinity, gMaxY = -Infinity;
     actions.forEach((a: any) => {
@@ -397,7 +955,6 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
     const svgH = gMaxY - gMinY + pad * 2;
     const isSafety = viewMode === 'safety';
     let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgW}" height="${svgH}" viewBox="${gMinX - pad} ${gMinY - pad} ${svgW} ${svgH}" style="background:#0f172a;font-family:system-ui,sans-serif">`;
-    // Links
     actions.forEach(act => {
       if (!act.sources || !Array.isArray(act.sources)) return;
       act.sources.forEach((sid: any) => {
@@ -405,31 +962,17 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
         if (!src) return;
         const x1 = (src.position?.x || 0) + NODE_W/2, y1 = (src.position?.y || 0) + NODE_H;
         const x2 = (act.position?.x || 0) + NODE_W/2, y2 = act.position?.y || 0;
-        const yM = y1 + (y2 - y1) / 2;
         const color = isSafety ? getEffectiveSafety(act).color : '#334155';
-        svg += `<path d="M${x1} ${y1} C${x1} ${yM},${x2} ${yM},${x2} ${y2}" fill="none" stroke="${color}" stroke-width="2.5" opacity="0.7"/>`;
+        svg += `<path d="M${x1} ${y1} C${x1} ${(y1+y2)/2},${x2} ${(y1+y2)/2},${x2} ${y2}" fill="none" stroke="${color}" stroke-width="2.5" opacity="0.7"/>`;
       });
     });
-    // Nodes
     actions.forEach(act => {
       const x = act.position?.x || 0, y = act.position?.y || 0;
       const safety = getEffectiveSafety(act);
       const fill = isSafety ? safety.bgColor : 'rgba(30,41,59,0.9)';
-      const border = isSafety ? safety.color : ((act.type === 'Agents::WebhookAgent' || act.type === 'Agents::TriggerAgent') ? '#22c55e' : '#6366f1');
+      const border = isSafety ? safety.color : '#6366f1';
       svg += `<rect x="${x}" y="${y}" width="${NODE_W}" height="${NODE_H - 20}" rx="10" fill="${fill}" stroke="${border}" stroke-width="2"/>`;
-      svg += `<text x="${x + 12}" y="${y + 28}" fill="white" font-size="13" font-weight="600">${(act.name || 'Unnamed').substring(0, 28)}</text>`;
-      svg += `<text x="${x + 12}" y="${y + 48}" fill="${isSafety ? safety.color : '#94a3b8'}" font-size="10">${(act.type || '').replace('Agents::','')}</text>`;
-      if (isSafety) {
-        svg += `<text x="${x + 12}" y="${y + 68}" fill="${safety.color}" font-size="11">${safety.icon} ${safety.label}</text>`;
-      }
     });
-    // Grid overlay
-    if (showGrid) {
-      grid.cells.forEach(c => {
-        svg += `<rect x="${c.x}" y="${c.y}" width="${c.w}" height="${c.h}" fill="none" stroke="#475569" stroke-width="1" stroke-dasharray="8,4" opacity="0.5"/>`;
-        svg += `<text x="${c.x + 8}" y="${c.y + 20}" fill="#64748b" font-size="14" font-weight="bold">${c.label}</text>`;
-      });
-    }
     svg += '</svg>';
     const blob = new Blob([svg], { type: 'image/svg+xml' });
     const a = document.createElement('a');
@@ -597,45 +1140,61 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
     }
   }, [actions]);
 
-  const handleCreateAction = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!actionName) return;
-    setCreating(true);
-    addLog('NETWORK', `Creating new action: ${actionName}`);
-    
-    try {
-      await actionsApi.createAction({
-        actionCreateRequest: {
-          name: actionName,
-          type: actionType as any,
-          storyId: storyId,
-          position: { x: 0, y: 0 },
-          options: {}, // Default empty options schema
-        }
-      });
-      addLog('SUCCESS', `Creation successful for ${actionName}`);
-      setActionName('');
-      fetchActions(); // Refresh grid
-    } catch (err: any) {
-      addLog('ERROR', `Action creation failed`, { error: err.message });
-    } finally {
-      setCreating(false);
+
+  // Phase 37: Global Actions "Fly-To" Navigation
+  useEffect(() => {
+    if (focusActionId && actions.length > 0) {
+      const target = actions.find(a => a.id === focusActionId);
+      if (target && target.position) {
+        addLog('INFO', `Auto-centering on focused action: ${target.name} (ID: ${focusActionId})`);
+        
+        // Calculate the center of the viewport in canvas coordinates
+        const containerW = canvasRef.current?.clientWidth || window.innerWidth;
+        const containerH = canvasRef.current?.clientHeight || window.innerHeight;
+        
+        // targetPos * zoom + pan = containerCenter
+        // pan = containerCenter - (targetPos * zoom)
+        // We also want to center the node itself (NODE_W/2, NODE_H/2)
+        const targetZoom = 1.0; // Reset to a readable zoom level
+        const nx = (target.position?.x ?? 0) + NODE_W / 2;
+        const ny = (target.position?.y ?? 0) + NODE_H / 2;
+        
+        setZoom(targetZoom);
+        setPan({
+          x: containerW / 2 - nx * targetZoom,
+          y: containerH / 2 - ny * targetZoom
+        });
+        
+        setHighlightedNodeId(focusActionId);
+        setInspectedNode(target);
+        setTimeout(() => setHighlightedNodeId(null), 3000);
+      }
     }
-  };
+  }, [focusActionId, actions]);
+
 
   return (
-    <div style={{ flex: 1, padding: '2rem 3rem', overflowY: 'auto' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, padding: '2rem 3rem', overflow: 'hidden' }} onMouseMove={handleGlobalMouseMove} onMouseUp={handleGlobalMouseUp}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
         <button onClick={onBack} className="btn-glass" style={{ fontSize: '0.8rem', padding: '0.5rem 1rem' }}>
           ← Back to Dashboard
         </button>
-        <button 
-          onClick={() => (window as any).electronAPI?.openExternal(`https://${tenant.replace('https://', '')}/stories/${storyId}`)} 
-          className="btn-primary" 
-          style={{ fontSize: '0.8rem', padding: '0.5rem 1rem', background: 'var(--success-color)' }}
-        >
-          ⭧ Open securely in Cloud
-        </button>
+        <div style={{ display: 'flex', gap: '0.75rem' }}>
+          <button
+            onClick={() => setInvestigationsOpen((open) => !open)}
+            className="btn-glass"
+            style={{ fontSize: '0.8rem', padding: '0.5rem 1rem' }}
+          >
+            💾 Investigations
+          </button>
+          <button 
+            onClick={() => (window as any).electronAPI?.openExternal(`https://${tenant.replace('https://', '')}/stories/${storyId}`)} 
+            className="btn-primary" 
+            style={{ fontSize: '0.8rem', padding: '0.5rem 1rem', background: 'var(--success-color)' }}
+          >
+            ⭧ Open securely in Cloud
+          </button>
+        </div>
       </div>
 
       <header style={{ marginBottom: '2rem' }}>
@@ -654,7 +1213,21 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
         <button onClick={() => setViewMode('json')} className={viewMode === 'json' ? 'btn-primary' : 'btn-glass'}>
           Raw Context JSON
         </button>
-        {(viewMode === 'canvas' || viewMode === 'safety') && actions.length > 0 && (
+        <button 
+          onClick={() => { setViewMode('debug'); fetchEvents(); }} 
+          className={viewMode === 'debug' ? 'btn-primary' : 'btn-glass'} 
+          style={viewMode === 'debug' ? { background: '#8b5cf6' } : {}}
+        >
+          🐛 Debug Trace
+        </button>
+        <button 
+          onClick={() => setViewMode('ledger')} 
+          className={viewMode === 'ledger' ? 'btn-primary' : 'btn-glass'} 
+          style={viewMode === 'ledger' ? { background: '#10b981' } : {}}
+        >
+          🗄️ Story Ledger
+        </button>
+        {(viewMode === 'canvas' || viewMode === 'safety' || viewMode === 'debug') && actions.length > 0 && (
            <button 
              onClick={() => recenterCanvas()} 
              className="btn-glass" 
@@ -709,6 +1282,72 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
           )}
         </div>
       ) : (
+        <>
+        {investigationsOpen && (
+          <div className="glass-panel nondraggable" style={{ marginBottom: '1rem', padding: '1rem 1.25rem', display: 'flex', gap: '1.25rem', alignItems: 'flex-start' }}>
+            <div style={{ minWidth: '320px', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '0.35rem' }}>Save Investigation</div>
+                <input
+                  value={investigationName}
+                  onChange={(e) => setInvestigationName(e.target.value)}
+                  placeholder={`Story ${storyId} failure analysis`}
+                  style={{ width: '100%' }}
+                />
+              </div>
+              <button className="btn-primary" onClick={saveInvestigation} disabled={savingInvestigation}>
+                {savingInvestigation ? 'Saving...' : selectedInvestigationId ? 'Update Investigation' : 'Save Investigation'}
+              </button>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                Saves story context, selected run/event, current debug node, notes, highlights, and a canvas screenshot.
+              </div>
+            </div>
+
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Saved Investigations</div>
+              {investigations.length === 0 ? (
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>No saved investigations for this story yet.</div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.75rem' }}>
+                  {investigations.map((item) => (
+                    <div key={item.id} style={{ border: item.id === selectedInvestigationId ? '1px solid var(--accent-color)' : '1px solid var(--glass-border)', borderRadius: '10px', padding: '0.75rem', background: 'rgba(255,255,255,0.03)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem' }}>
+                        <div>
+                          <div style={{ fontWeight: 600, color: 'white', marginBottom: '0.2rem' }}>{item.name}</div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                            {new Date(item.updated_at || item.created_at || '').toLocaleString()}
+                          </div>
+                        </div>
+                        <button
+                          className="btn-glass"
+                          onClick={() => item.id && deleteInvestigation(item.id)}
+                          style={{ padding: '0.2rem 0.45rem', fontSize: '0.72rem', color: '#f87171' }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
+                        Mode: {item.mode?.toUpperCase() || 'N/A'} · Run: {item.selected_run_guid ? `${item.selected_run_guid.slice(0, 8)}...` : 'All'}
+                      </div>
+                      {item.screenshot_data_url && (
+                        <img
+                          src={item.screenshot_data_url}
+                          alt={item.name}
+                          style={{ width: '100%', marginTop: '0.6rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.08)' }}
+                        />
+                      )}
+                      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
+                        <button className="btn-glass" onClick={() => applyInvestigation(item)} style={{ fontSize: '0.75rem', padding: '0.4rem 0.7rem' }}>
+                          Reopen
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
         <div style={{ display: 'flex', gap: '2rem', alignItems: 'flex-start', flex: 1, minHeight: '600px' }}>
           
         {/* Actions Canvas Plane */}
@@ -722,11 +1361,170 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
             backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.05) 1px, transparent 1px)',
             backgroundPosition: `${pan.x}px ${pan.y}px`
           }}
-          onMouseDown={handleMouseDown} onMouseMove={handleMouseMove}
-          onMouseUp={handleGlobalMouseUp} onMouseLeave={handleGlobalMouseUp}
+          onMouseDown={handleMouseDown}
           onWheel={handleWheel}
         >
-          {/* Zoom Overlay HUD */}
+          {/* Header Overlay */}
+          <div 
+            className="glass-panel" 
+            style={{
+              position: 'absolute', top: '1rem', left: '1rem', right: '1rem',
+              height: '4rem', zIndex: 100, display: 'flex', alignItems: 'center', padding: '0 1.5rem',
+              gap: '1rem'
+            }}
+          >
+            <button className="btn-glass" onClick={onBack} title="Back to Dashboard">←</button>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <h2 style={{ fontSize: '1.2rem', fontWeight: 600, margin: 0 }}>Story {storyId}</h2>
+                <span style={{ 
+                  fontSize: '0.65rem', fontWeight: 800, padding: '2px 6px', 
+                  borderRadius: '4px', background: 'rgba(139, 92, 246, 0.2)', color: '#a78bfa',
+                  border: '1px solid rgba(139, 92, 246, 0.3)', letterSpacing: '0.05em'
+                }}>ALPHA</span>
+
+                {/* Phase 27: Status Badges */}
+                {storyMetadata && (
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <span style={{ 
+                    fontSize: '0.65rem', fontWeight: 800, padding: '2px 8px', borderRadius: '4px',
+                    background: storyContext.mode === 'live' ? 'rgba(34,197,94,0.1)' : 'rgba(139,92,246,0.1)',
+                    color: storyContext.mode === 'live' ? 'var(--success-color)' : '#a78bfa',
+                    border: `1px solid ${storyContext.mode === 'live' ? 'rgba(34,197,94,0.3)' : 'rgba(139,92,246,0.3)'}`
+                  }}>
+                    ENV: {storyContext.mode.toUpperCase()}
+                  </span>
+                  {!storyMetadata.published && (
+                    <span style={{ fontSize: '0.65rem', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', border: '1px solid rgba(245, 158, 11, 0.3)' }}>DRAFT</span>
+                  )}
+                  {storyMetadata.changeControlEnabled && (
+                    <span style={{ fontSize: '0.65rem', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', border: '1px solid rgba(59, 130, 246, 0.3)' }}>CHANGE CONTROL</span>
+                  )}
+                  {storyMetadata.locked && (
+                    <span title="This story is locked on the Tines server" style={{ fontSize: '0.65rem', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(239, 68, 68, 0.15)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.3)' }}>SERVER LOCKED</span>
+                  )}
+                </div>
+                )}
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                {syncStatus === 'syncing' ? (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', color: '#f59e0b' }}>
+                    <span className="pulse-dot" style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#f59e0b' }}></span>
+                    Syncing...
+                  </span>
+                ) : syncStatus === 'error' ? (
+                  <span style={{ color: '#ef4444' }}>⚠️ Sync Error</span>
+                ) : (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', color: '#10b981' }}>
+                    ✓ Synced
+                    {lastSaved && <span style={{ opacity: 0.6, fontSize: '0.7rem' }}>· {lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div style={{ flex: 1 }} />
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+              {/* Local Safety Lock Toggle */}
+              <button 
+                onClick={() => setSafetyLock(!safetyLock)} 
+                className="btn-glass"
+                style={{ 
+                  padding: '0.4rem 0.8rem', 
+                  fontSize: '0.75rem', 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '0.4rem',
+                  borderColor: safetyLock ? 'var(--accent-color)' : 'rgba(239, 68, 68, 0.4)',
+                  background: safetyLock ? 'rgba(99, 102, 241, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                  color: safetyLock ? 'var(--accent-hover)' : '#f87171'
+                }}
+              >
+                {safetyLock ? '🛡️ Shield ON' : '🔓 Shield OFF'}
+              </button>
+
+              {/* Server Lock Toggle */}
+              <button 
+                onClick={toggleServerLock} 
+                className="btn-glass"
+                style={{ 
+                  padding: '0.4rem 0.8rem', 
+                  fontSize: '0.75rem', 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '0.4rem',
+                  borderColor: storyMetadata?.locked ? 'rgba(239, 68, 68, 0.6)' : undefined,
+                  background: storyMetadata?.locked ? 'rgba(239, 68, 68, 0.05)' : undefined
+                }}
+              >
+                {storyMetadata?.locked ? '☁️ Server: LOCKED' : '☁️ Server: OPEN'}
+              </button>
+            </div>
+          </div>
+
+          {/* Sub-Header: Health Ribbon */}
+          {storyMetadata && (
+            <div style={{
+              position: 'absolute', top: '5rem', left: '1rem', right: '1rem',
+              background: 'rgba(30, 41, 59, 0.5)',
+              backdropFilter: 'blur(8px)',
+              border: '1px solid var(--glass-border)',
+              borderRadius: '8px',
+              padding: '0.4rem 1rem',
+              display: 'flex',
+              gap: '1.5rem',
+              fontSize: '0.7rem',
+              color: 'var(--text-secondary)',
+              zIndex: 90,
+              alignItems: 'center'
+            }}>
+              <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                <span style={{ fontWeight: 600, color: 'white', fontSize: '0.65rem', opacity: 0.7 }}>HEALTH:</span>
+                <span style={{ 
+                  color: debugStats.failingActions > 0 || debugStats.errorEvents > 0 ? 'var(--danger-color)' : 'var(--success-color)',
+                  textTransform: 'uppercase', fontWeight: 800
+                }}>
+                  {debugStats.failingActions > 0 || debugStats.errorEvents > 0 ? 'UNHEALTHY' : 'OK'}
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <span style={{ fontSize: '0.65rem', opacity: 0.7 }}>TOKENS:</span>
+                <div style={{ width: 60, height: 4, background: 'rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' }}>
+                  <div style={{ 
+                    width: `${Math.min(100, (storyMetadata as any)?.tokens_used_percentage || 0)}%`, 
+                    height: '100%', 
+                    background: ((storyMetadata as any)?.tokens_used_percentage || 0) > 80 ? 'var(--danger-color)' : 'var(--accent-color)' 
+                  }} />
+                </div>
+                <span style={{ fontWeight: 600, color: 'white' }}>{(storyMetadata as any)?.tokens_used_percentage || 0}%</span>
+              </div>
+
+              <div style={{ display: 'flex', gap: '0.4rem' }}>
+                <span style={{ opacity: 0.7 }}>RUNS:</span>
+                <span style={{ color: 'white', fontWeight: 600 }}>{(storyMetadata as any)?.pending_action_runs_count || 0} pending / {(storyMetadata as any)?.concurrent_runs_count || 0} active</span>
+              </div>
+
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.8rem', alignItems: 'center' }}>
+                <button 
+                  onClick={() => fetchEvents(true)}
+                  style={{ 
+                    background: 'rgba(255,255,255,0.1)', border: '1px solid var(--glass-border)', borderRadius: '4px', padding: '2px 8px', color: 'white', fontSize: '0.6rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px'
+                  }}
+                  title="Force refresh from Tines Cloud (bypasses DuckDB cache)"
+                >
+                  <span>☁️</span> CLOUD RE-SYNC
+                </button>
+                <div style={{ opacity: 0.5, fontSize: '0.6rem' }}>
+                  ID: {storyId} · SYNCED {lastSaved?.toLocaleTimeString()}
+                </div>
+              </div>
+            </div>
+          )}
+
+
+      {/* Canvas Controls HUD */}
           <div style={{ position: 'absolute', bottom: '20px', right: '20px', zIndex: 1000, display: 'flex', gap: '0.5rem', background: 'var(--bg-card)', padding: '0.5rem', borderRadius: '8px', border: '1px solid var(--glass-border)', boxShadow: '0 4px 12px rgba(0,0,0,0.5)' }}>
             <button className="btn-glass" onClick={autoLayout} style={{ padding: '4px 12px' }} title="Auto-layout nodes">✨</button>
             <button className="btn-glass" onClick={() => setShowGrid(g => !g)} style={{ padding: '4px 12px', color: showGrid ? '#3b82f6' : undefined }} title="Toggle grid overlay">▦</button>
@@ -829,38 +1627,83 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
             transition: isDragging ? 'none' : 'transform 0.05s linear'
           }}>
             {/* SVG Connecting Lines Layer */}
-            <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', overflow: 'visible', zIndex: 0 }}>
+            <svg style={{ position: 'absolute', top: 0, left: 0, width: '5000px', height: '5000px', pointerEvents: 'none', overflow: 'visible' }}>
+              <defs>
+                <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orientation="auto">
+                  <polygon points="0 0, 10 3.5, 0 7" fill="rgba(255,255,255,0.3)" />
+                </marker>
+              </defs>
               {actions?.flatMap(act => {
                 if (!act || !Array.isArray(act.sources) || act.sources.length === 0) return [];
                 return act.sources.map(sourceId => {
                   const sourceAct = actions.find(a => a?.id === sourceId);
                   if (!sourceAct) return null;
                   
-                  const x1 = (sourceAct.position?.x || 0) + 120; 
-                  const y1 = (sourceAct.position?.y || 0) + 90; 
-                  const x2 = (act.position?.x || 0) + 120;
-                  const y2 = (act.position?.y || 0);
-                  const yMid = y1 + (y2 - y1) / 2;
-                  const path = `M ${x1} ${y1} C ${x1} ${yMid}, ${x2} ${yMid}, ${x2} ${y2}`;
-
+                  const x1 = ((sourceAct.position as any)?.x ?? (sourceAct.position as any)?.X ?? 0) + 240; 
+                  const y1 = ((sourceAct.position as any)?.y ?? (sourceAct.position as any)?.Y ?? 0) + 60; 
+                  const x2 = ((act.position as any)?.x ?? (act.position as any)?.X ?? 0);
+                  const y2 = ((act.position as any)?.y ?? (act.position as any)?.Y ?? 0) + 60;
+                  const mx = (x1 + x2) / 2;
+                  const my = (y1 + y2) / 2;
+                  
                   // Safety Map: color SVG links by the receiver's safety tier
-                  let strokeColor = 'var(--glass-border)';
+                  let strokeColor = 'rgba(255,255,255,0.2)';
                   if (viewMode === 'safety') {
                     strokeColor = getEffectiveSafety(act).color;
                   }
 
+                  // Causal Lineage Highlight [D3]
+                  const isCausal = viewMode === 'debug' && causalNodeIds.has(sourceId) && causalNodeIds.has(act.id!);
+                  if (isCausal) {
+                    strokeColor = '#a78bfa'; // Purple glow for causal path
+                  }
+
                   return (
-                    <path 
-                      key={`${sourceId}-${act.id}`}
-                      d={path}
-                      fill="none"
-                      stroke={strokeColor}
-                      strokeWidth="3"
-                      opacity="0.8"
-                    />
+                    <g key={`${sourceId}-${act.id}`} style={{ transition: 'opacity 0.3s ease' }}>
+                      <path 
+                        d={`M ${x1} ${y1} C ${x1 + 50} ${y1}, ${x2 - 50} ${y2}, ${x2} ${y2}`}
+                        fill="none"
+                        stroke={strokeColor}
+                        strokeWidth={isCausal ? "5" : "3"}
+                        opacity={hoveredEventId && !isCausal ? "0.1" : (isCausal ? "1" : "0.8")}
+                        markerEnd="url(#arrowhead)"
+                        style={{ filter: isCausal ? 'drop-shadow(0 0 8px #a78bfa)' : 'none' }}
+                      />
+                      <circle 
+                        cx={mx} cy={my} r="8" 
+                        fill="#ef4444" 
+                        style={{ cursor: 'pointer', pointerEvents: 'auto' }}
+                        onClick={(e) => { e.stopPropagation(); deleteConnection(sourceId, act.id!); }}
+                      >
+                        <title>Delete connection</title>
+                      </circle>
+                      <text x={mx} y={my + 2} textAnchor="middle" style={{ fontSize: '10px', fill: 'white', pointerEvents: 'none' }}>×</text>
+                    </g>
                   );
                 }).filter(Boolean);
               })}
+              
+              {/* Ghost Link while connecting */}
+              {connectingFromId !== null && (() => {
+                 const src = actions.find(a => a.id === connectingFromId);
+                 if (!src) return null;
+                 const sx = (src.position?.x || 0) + 240;
+                 const sy = (src.position?.y || 0) + 60;
+                 // Convert screen mouse pos back to canvas coordinates
+                 const tx = (dragMousePos.x - pan.x) / zoom;
+                 const ty = (dragMousePos.y - pan.y) / zoom;
+                 return (
+                   <path 
+                      d={`M ${sx} ${sy} C ${sx + 50} ${sy}, ${tx - 50} ${ty}, ${tx} ${ty}`}
+                      fill="none" 
+                      stroke="var(--accent-color)" 
+                      strokeWidth="3" 
+                      strokeDasharray="5,5"
+                      opacity="0.6"
+                      markerEnd="url(#arrowhead)"
+                    />
+                 );
+              })()}
             </svg>
 
             {loading && <div style={{ position: 'absolute', top: 20, left: 20, opacity: 0.7 }}>Loading connections...</div>}
@@ -880,16 +1723,27 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
                 onClick={(e) => handleNodeClick(e, act)}
                 style={{ 
                 position: 'absolute',
-                left: act.position?.x || 0,
-                top: act.position?.y || 0,
+                left: (act.position as any)?.x ?? (act.position as any)?.X ?? 0,
+                top: (act.position as any)?.y ?? (act.position as any)?.Y ?? 0,
                 width: '240px', padding: '1.25rem',
-                boxShadow: isBeingDragged ? '0 16px 48px rgba(0,0,0,0.6)' : '0 8px 32px rgba(0,0,0,0.3)',
                 borderTop: `3px solid ${isSafetyMode ? safety.color : (isTrigger ? 'var(--success-color)' : 'var(--accent-color)')}`,
                 background: isSafetyMode ? safety.bgColor : undefined,
                 cursor: isBeingDragged ? 'grabbing' : 'grab', zIndex: isBeingDragged ? 50 : 10,
                 userSelect: 'none', transition: isBeingDragged ? 'none' : 'box-shadow 0.2s ease, outline 0.2s ease',
-                outline: highlightedNodeId === act.id ? '4px solid var(--accent-color)' : 'none',
-                outlineOffset: '4px'
+                outline: highlightedNodeId === act.id || highlightedNodeIds.has(act.id!) ? '4px solid var(--accent-color)' : 'none',
+                outlineOffset: '4px',
+                // Causal Lineage Highlight [D3+46] - Dim non-participating nodes during a trace
+                 opacity: (hoveredEventId || executionPath.size > 0 || highlightedNodeIds.size > 0) && !causalNodeIds.has(act.id!) && !highlightedNodeIds.has(act.id!) ? 0.3 : 1,
+                boxShadow: viewMode === 'debug' && act.id != null ? (() => {
+                  const h = getNodeHealth(act.id);
+                  const isCausal = causalNodeIds.has(act.id!);
+                  if (isCausal) return `0 0 20px 4px #a78bfa, 0 8px 32px rgba(0,0,0,0.5)`;
+                  
+                  return h === 'error' ? '0 0 0 3px #ef4444, 0 8px 32px rgba(239,68,68,0.4)'
+                    : h === 'warning' ? '0 0 0 3px #f59e0b'
+                    : h === 'ok' ? '0 0 0 3px #22c55e'
+                    : '0 0 0 3px #64748b';
+                })() : (isBeingDragged ? '0 16px 48px rgba(0,0,0,0.6)' : '0 8px 32px rgba(0,0,0,0.3)')
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
                   <h4 style={{ fontWeight: 600, color: 'white', margin: 0, pointerEvents: 'none', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>{act.name || 'Unnamed Action'}</h4>
@@ -921,6 +1775,30 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
                     )}
                     <button onClick={(e) => handleDeleteAction(e, act.id!, act.name!)} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.25rem', padding: 0, pointerEvents: 'auto' }} title="Delete Action">×</button>
                   </div>
+                  {/* Debug Mode: health badge */}
+                  {viewMode === 'debug' && act.id != null && (() => {
+                    const h = getNodeHealth(act.id);
+                    const icons: Record<string, string> = { ok: '✅', error: '❌', warning: '⚠️', none: '⏸' };
+                    const colors: Record<string, string> = { ok: '#22c55e', error: '#ef4444', warning: '#f59e0b', none: '#64748b' };
+                    return (
+                      <span 
+                        className="nondraggable"
+                        style={{ 
+                          fontSize: '0.65rem', padding: '2px 6px', borderRadius: '4px', fontWeight: 600,
+                          background: `${colors[h]}22`, color: colors[h], cursor: 'pointer', pointerEvents: 'auto'
+                        }}
+                        onClick={(e) => { 
+                          e.stopPropagation(); 
+                          setDebugNode(act); 
+                          fetchEvents();
+                          if (act.id) fetchActionLogs(act.id);
+                        }}
+                        title={`Debug: ${h} — click to inspect events`}
+                      >
+                        {icons[h]} {(eventMap.get(act.id) || []).length} evt{(eventMap.get(act.id) || []).length !== 1 ? 's' : ''}
+                      </span>
+                    );
+                  })()}
                 </div>
                 <span style={{ fontSize: '0.75rem', color: isSafetyMode ? safety.color : (isTrigger ? 'var(--success-color)' : 'var(--accent-hover)'), pointerEvents: 'none' }}>
                   {typeof act.type === 'string' ? act.type.replace('Agents::', '') : 'Unknown Agent'}
@@ -931,6 +1809,39 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
                   </div>
                 )}
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.5rem', pointerEvents: 'none' }}>ID: {act.id}</div>
+                
+                {/* Connection Port (Right side) */}
+                <div 
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                    setConnectingFromId(act.id!);
+                    setDragMousePos({ x: e.clientX, y: e.clientY });
+                  }}
+                  onMouseUp={(e) => {
+                    e.stopPropagation();
+                    finalizeConnection(act.id!);
+                  }}
+                  className="pulse-dot"
+                  style={{
+                    position: 'absolute', right: '-8px', top: '50%', transform: 'translateY(-50%)',
+                    width: '16px', height: '16px', background: 'var(--accent-color)',
+                    border: '3px solid var(--bg-card)', borderRadius: '50%', cursor: 'crosshair',
+                    zIndex: 20, pointerEvents: 'auto'
+                  }}
+                  title="Drag to connect"
+                />
+                
+                {/* Drop Target (Left side - invisible but active) */}
+                <div 
+                  onMouseUp={(e) => {
+                    e.stopPropagation();
+                    finalizeConnection(act.id!);
+                  }}
+                  style={{
+                    position: 'absolute', left: '-10px', top: 0, bottom: 0, width: '30px',
+                    zIndex: 15, pointerEvents: 'auto'
+                  }}
+                />
               </div>
             )})}
 
@@ -1031,13 +1942,14 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
         </div>
 
         {/* Create Action Drawer — Collapsible */}
-        <div className="glass-panel nondraggable" style={{ 
-          width: toolsCollapsed ? '40px' : '280px', 
-          padding: toolsCollapsed ? '1rem 0.5rem' : '1.5rem', 
-          background: 'rgba(59, 130, 246, 0.05)', borderColor: 'rgba(59, 130, 246, 0.2)',
-          transition: 'width 0.25s ease, padding 0.25s ease',
-          overflow: 'hidden', flexShrink: 0, position: 'relative'
-        }}>
+        {(viewMode === 'canvas' || viewMode === 'safety') && (
+          <div className="glass-panel nondraggable" style={{ 
+            width: toolsCollapsed ? '40px' : '280px', 
+            padding: toolsCollapsed ? '1rem 0.5rem' : '1.5rem', 
+            background: 'rgba(59, 130, 246, 0.05)', borderColor: 'rgba(59, 130, 246, 0.2)',
+            transition: 'width 0.25s ease, padding 0.25s ease',
+            overflow: 'hidden', flexShrink: 0, position: 'relative'
+          }}>
           <button 
             onClick={() => setToolsCollapsed(c => !c)}
             style={{ position: 'absolute', top: '0.5rem', right: toolsCollapsed ? '0.5rem' : '0.75rem', background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1rem', zIndex: 10 }}
@@ -1100,8 +2012,9 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
                   key={tpl.name}
                   className="btn-glass"
                   disabled={creating}
-                  onClick={async () => {
-                    setCreating(true);
+                    onClick={async () => {
+                      if (safetyLock) return;
+                      setCreating(true);
                     addLog('NETWORK', `Creating template: ${tpl.name}`);
                     try {
                       await actionsApi.createAction({ actionCreateRequest: { name: tpl.name, type: tpl.type as any, storyId: storyId, options: {}, position: {} as any } });
@@ -1121,11 +2034,126 @@ export default function StoryView({ tenant, apiKey, storyId, onBack }: StoryView
               ))}
             </div>
           </div>
-          </>
-          )}
-        </div>
-        {inspectedNode && <NodeInspector action={inspectedNode} tenant={tenant} apiKey={apiKey} onClose={() => setInspectedNode(null)} />}
+        </>
+        )}
       </div>
+    )}
+          {/* Phase 54: Story Event Ledger View */}
+          {viewMode === 'ledger' && (
+            <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 100, background: '#0f172a' }}>
+              <StoryLedger 
+                storyId={Number(storyId)}
+                actions={actions}
+                onFlyToNode={(id) => {
+                  setViewMode('canvas');
+                  setTimeout(() => flyToNode(id), 100);
+                }}
+                onClose={() => setViewMode('canvas')}
+              />
+            </div>
+          )}
+
+        {inspectedNode && viewMode !== 'debug' && <NodeInspector action={inspectedNode} tenant={tenant} apiKey={apiKey} onClose={() => setInspectedNode(null)} />}
+        {debugNode && viewMode === 'debug' && (
+          <DebugInspector
+            action={debugNode}
+            events={eventMap.get(debugNode.id!) || []}
+            logs={actionLogMap.get(debugNode.id!) || []}
+            onClose={() => {
+              setDebugNode(null);
+              setExecutionPath(new Set());
+              setSelectedEventId(null);
+            }}
+            onRefresh={() => {
+              fetchEvents();
+              if (debugNode?.id) fetchActionLogs(debugNode.id, true);
+            }}
+            onHoverEvent={setHoveredEventId}
+            onNavigateToEvent={handleNavigateToEvent}
+            highlightEventId={selectedEventId}
+            tenant={tenant}
+            apiKey={apiKey}
+          />
+        )}
+      </div>
+
+      {viewMode === 'debug' && !debugLoading && (
+        <div style={{
+          position: 'fixed', bottom: '1.5rem', left: '50%', transform: 'translateX(-50%)',
+          background: 'rgba(15,18,30,0.9)', border: '1px solid rgba(139,92,246,0.4)',
+          borderRadius: '12px', padding: '0.6rem 1.25rem',
+          display: 'flex', gap: '1.5rem', alignItems: 'center',
+          backdropFilter: 'blur(12px)', zIndex: 1000, boxShadow: '0 8px 32px rgba(0,0,0,0.5)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span style={{ fontSize: '0.75rem', color: '#a78bfa', fontWeight: 700 }}>🐛 DEBUG</span>
+            <div className="pulse-dot" style={{ width: 6, height: 6, borderRadius: '50%', background: '#a78bfa', boxShadow: '0 0 8px #a78bfa' }} />
+          </div>
+          
+          {/* Run Selector [D2] */}
+          <select 
+            value={selectedRunGuid || ''} 
+            onChange={e => setSelectedRunGuid(e.target.value || null)}
+            className="btn-glass"
+            style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '4px', maxWidth: '160px' }}
+          >
+            <option value="">All Execution Runs</option>
+            {debugStats.runGuids.map(guid => (
+              <option key={guid} value={guid}>Run: {guid.slice(0, 8)}...</option>
+            ))}
+          </select>
+
+          <span style={{ height: '1rem', width: '1px', background: 'rgba(255,255,255,0.1)' }} />
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+            Actions: <strong style={{ color: 'white' }}>{actions.length}</strong> 
+            <span style={{ color: debugStats.failingActions > 0 ? '#ef4444' : 'inherit' }}> (❌ {debugStats.failingActions})</span> | 
+            Events: <strong style={{ color: 'white' }}>{debugStats.totalEvents}</strong>
+            <span style={{ color: debugStats.errorEvents > 0 ? '#ef4444' : 'inherit' }}> (❌ {debugStats.errorEvents})</span>
+          </span>
+          <span style={{ height: '1rem', width: '1px', background: 'rgba(255,255,255,0.1)' }} />
+          <span style={{ fontSize: '0.8rem', color: '#22c55e' }}>✅ {debugStats.okEvents}</span>
+          <span 
+            className="btn-status-error"
+            style={{ 
+              fontSize: '0.8rem', 
+              color: debugStats.failingActions > 0 ? '#ef4444' : 'var(--text-secondary)', 
+              cursor: 'pointer',
+              fontWeight: 700,
+              background: highlightedNodeIds.size > 0 ? 'rgba(239,68,68,0.2)' : 'transparent',
+              padding: '2px 6px', borderRadius: '4px'
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (highlightedNodeIds.size > 0) {
+                setHighlightedNodeIds(new Set());
+                return;
+              }
+              const errIds = actions.filter(a => getNodeHealth(a.id!) === 'error').map(a => a.id!);
+              setHighlightedNodeIds(new Set(errIds));
+            }}
+            title="Click to highlight all actions in error state"
+          >❌ {debugStats.failingActions} Actions</span>
+          <span style={{ fontSize: '0.8rem', color: debugStats.warningActions > 0 ? '#f59e0b' : 'var(--text-secondary)' }}>⚠️ {debugStats.warningActions}</span>
+          {debugStats.pendingRuns > 0 && <span style={{ fontSize: '0.8rem', color: '#60a5fa' }}>⏳ {debugStats.pendingRuns} pending</span>}
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Fetched: {lastEventFetch ? lastEventFetch.toLocaleTimeString() : 'N/A'}</span>
+          
+          <button 
+            className="btn-glass"
+            onClick={() => {
+              fetchStoryMetadata();
+              fetchActions();
+              fetchEvents();
+              // Refresh current debug logs if active
+              if (debugNode?.id) fetchActionLogs(debugNode.id, true);
+            }}
+            style={{ padding: '4px 8px', fontSize: '0.75rem' }}
+            title="Force Global Refresh"
+          >
+            🔄
+          </button>
+        </div>
+      )}
+      </>
       )}
     </div>
   );

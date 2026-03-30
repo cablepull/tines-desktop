@@ -1,13 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useState, useMemo } from 'react';
-import { Configuration, StoriesApi, ActionsApi } from 'tines-sdk';
+import { Configuration, StoriesApi, ActionsApi, TeamsApi } from 'tines-sdk';
 import type { Story } from 'tines-sdk';
 import { useLogger } from '../context/LogContext';
+import ForensicLookup from './ForensicLookup';
 
 interface DashboardProps {
   tenant: string;
   apiKey: string;
-  onSelectStory: (id: number) => void;
+  onSelectStory: (id: number, mode?: 'live' | 'test' | 'draft', draftId?: number, actionId?: number) => void;
 }
 
 export default function Dashboard({ tenant, apiKey, onSelectStory }: DashboardProps) {
@@ -19,12 +20,18 @@ export default function Dashboard({ tenant, apiKey, onSelectStory }: DashboardPr
   const [newStoryName, setNewStoryName] = useState('');
   const [creatingStory, setCreatingStory] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  
+  // Multi-Team State
+  const [teams, setTeams] = useState<any[]>([]);
+  const [activeTeamId, setActiveTeamId] = useState<number | null>(null);
+  
   const { addLog } = useLogger();
 
   // Initialize the native generated TS SDK client
   const storiesApi = useMemo(() => {
     const basePath = tenant.startsWith('http') ? tenant : `https://${tenant}`;
-    const config = new Configuration({ basePath, apiKey });
+    // Using accessToken instead of apiKey ensures the SDK uses 'Authorization: Bearer'
+    const config = new Configuration({ basePath, accessToken: apiKey });
     return new StoriesApi(config);
   }, [tenant, apiKey]);
 
@@ -39,11 +46,36 @@ export default function Dashboard({ tenant, apiKey, onSelectStory }: DashboardPr
     try {
       if (!silent) setLoading(true);
       setError(null);
-      addLog('NETWORK', `Fetching up to 12 stories from tenant...`);
-      const res: any = await storiesApi.listStories({ teamId: 1, perPage: 12 });
-      const rawStories = res.stories ? res.stories : (Array.isArray(res) ? res : []);
-      setStories(rawStories);
-      addLog('SUCCESS', `Successfully fetched ${rawStories.length} stories`);
+      
+      const basePath = tenant.startsWith('http') ? tenant : `https://${tenant}`;
+      const teamsApi = new TeamsApi(new Configuration({ basePath, accessToken: apiKey }));
+      
+      addLog('NETWORK', `Fetching accessible teams...`);
+      const teamsRes: any = await teamsApi.listTeams({ perPage: 100, includePersonalTeams: true });
+      const teamsList = teamsRes.teams || (Array.isArray(teamsRes) ? teamsRes : []);
+      
+      // Categorize teams: Heuristic for Personal vs Team
+      // Usually personal teams have properties or names indicating so, but we'll use a local categorizer.
+      const categorized = teamsList.map((t: any) => ({
+        ...t,
+        isPersonal: t.name?.toLowerCase().includes('personal') || t.id === teamsList[0]?.id // Fallback heuristic
+      }));
+      setTeams(categorized);
+
+      const targetTeamId = activeTeamId || teamsList[0]?.id;
+      if (targetTeamId && !activeTeamId) {
+        setActiveTeamId(targetTeamId);
+      }
+
+      if (targetTeamId) {
+        addLog('NETWORK', `Fetching stories from Team ${targetTeamId}...`);
+        const res: any = await storiesApi.listStories({ teamId: targetTeamId, perPage: 24 });
+        const rawStories = res.stories ? res.stories : (Array.isArray(res) ? res : []);
+        setStories(rawStories);
+        addLog('SUCCESS', `Successfully fetched ${rawStories.length} stories`);
+      } else {
+        addLog('WARNING', 'No teams found for this user.');
+      }
     } catch (err: any) {
       console.error(err);
       const msg = err.message || 'Failed to fetch stories.';
@@ -57,7 +89,7 @@ export default function Dashboard({ tenant, apiKey, onSelectStory }: DashboardPr
   useEffect(() => {
     fetchStories();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storiesApi]);
+  }, [storiesApi, activeTeamId]);
 
   const handleCreateStory = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,16 +97,8 @@ export default function Dashboard({ tenant, apiKey, onSelectStory }: DashboardPr
     setCreatingStory(true);
     addLog('NETWORK', `Creating new Workspace Story: ${newStoryName}`);
     try {
-      const basePath = tenant.startsWith('http') ? tenant : `https://${tenant}`;
-      const teamsRes = await fetch(`${basePath}/api/v1/teams`, { headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' } });
-      let teamId = undefined;
-      if (teamsRes.ok) {
-         const tData = await teamsRes.json();
-         teamId = (tData.teams && tData.teams[0]?.id) || (Array.isArray(tData) && tData[0]?.id) || undefined;
-      }
-      
       const payload: any = { name: newStoryName };
-      if (teamId) payload.teamId = teamId;
+      if (activeTeamId) payload.teamId = activeTeamId;
 
       await storiesApi.createStory({
         storyCreateRequest: payload
@@ -84,6 +108,7 @@ export default function Dashboard({ tenant, apiKey, onSelectStory }: DashboardPr
       fetchStories(true);
     } catch (err: any) {
       addLog('ERROR', 'Failed to create story', { error: err.message });
+      setError(`Failed to create story: ${err.message}`);
     } finally {
       setCreatingStory(false);
     }
@@ -91,20 +116,15 @@ export default function Dashboard({ tenant, apiKey, onSelectStory }: DashboardPr
 
   const handleScaffoldTemplate = async () => {
     setCreatingStory(true);
-    addLog('NETWORK', 'Scaffolding Advanced Event Target logic (3 linked agents)...');
+    const flowName = `SIEM Incident Automations — ${new Date().toLocaleTimeString()}`;
+    addLog('NETWORK', `Scaffolding ${flowName} (3 linked agents)...`);
     try {
       const basePath = tenant.startsWith('http') ? tenant : `https://${tenant}`;
-      const actionsApi = new ActionsApi(new Configuration({ basePath, apiKey }));
+      // FIX: Use accessToken (Bearer) instead of apiKey (X-User-Token)
+      const actionsApi = new ActionsApi(new Configuration({ basePath, accessToken: apiKey }));
 
-      const teamsRes = await fetch(`${basePath}/api/v1/teams`, { headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' } });
-      let teamId = undefined;
-      if (teamsRes.ok) {
-         const tData = await teamsRes.json();
-         teamId = (tData.teams && tData.teams[0]?.id) || (Array.isArray(tData) && tData[0]?.id) || undefined;
-      }
-
-      const payload: any = { name: 'SIEM Incident Automations' };
-      if (teamId) payload.teamId = teamId;
+      const payload: any = { name: flowName };
+      if (activeTeamId) payload.teamId = activeTeamId;
 
       // 1. Scaffold Story Container
       const storyRes: any = await storiesApi.createStory({ storyCreateRequest: payload });
@@ -112,20 +132,51 @@ export default function Dashboard({ tenant, apiKey, onSelectStory }: DashboardPr
       if (!newId) throw new Error("Missing newly created Story ID");
 
       // 2. Scaffold Webhook Agent
+      addLog('NETWORK', `Step 2/4: Creating Webhook Trigger...`);
       const hookRes: any = await actionsApi.createAction({
-        actionCreateRequest: { name: 'Ingest Trigger', type: 'Agents::WebhookAgent' as any, storyId: newId, position: { x: 300, y: 100 }, options: {} }
+        actionCreateRequest: { 
+          name: 'Ingest Trigger', 
+          type: 'Agents::WebhookAgent' as any, 
+          storyId: newId, 
+          position: { x: 300, y: 100 }, 
+          options: {
+            "get_response_body": "OK"
+          }
+        }
       });
       const hookId = hookRes.id || hookRes.action?.id;
 
       // 3. Scaffold Linked HTTP Request
+      addLog('NETWORK', `Step 3/4: Adding Query Endpoint...`);
       const httpRes: any = await actionsApi.createAction({
-         actionCreateRequest: { name: 'Query Endpoint', type: 'Agents::HttpRequestAgent' as any, storyId: newId, position: { x: 300, y: 250 }, sourceIds: [hookId], options: {} }
+         actionCreateRequest: { 
+           name: 'Query Endpoint', 
+           type: 'Agents::HttpRequestAgent' as any, 
+           storyId: newId, 
+           position: { x: 300, y: 250 }, 
+           sourceIds: [hookId], 
+           options: {
+             "url": "https://api.example.com/v1/enrichment",
+             "method": "get"
+           } 
+         }
       });
       const httpId = httpRes.id || httpRes.action?.id;
 
       // 4. Scaffold Linked Transformation
+      addLog('NETWORK', `Step 4/4: Finalizing Data Transform...`);
       await actionsApi.createAction({
-         actionCreateRequest: { name: 'Transform Outputs', type: 'Agents::EventTransformationAgent' as any, storyId: newId, position: { x: 300, y: 400 }, sourceIds: [httpId], options: {} }
+         actionCreateRequest: { 
+           name: 'Transform Outputs', 
+           type: 'Agents::EventTransformationAgent' as any, 
+           storyId: newId, 
+           position: { x: 300, y: 400 }, 
+           sourceIds: [httpId], 
+           options: {
+             "mode": "message_only",
+             "message": "Enrichment complete for incident."
+           } 
+         }
       });
 
       addLog('SUCCESS', 'Successfully auto-generated Advanced SIEM logic schema!');
@@ -139,19 +190,50 @@ export default function Dashboard({ tenant, apiKey, onSelectStory }: DashboardPr
 
   return (
     <div style={{ flex: 1, padding: '2rem 3rem', overflowY: 'auto' }}>
-      <header style={{ marginBottom: '2.5rem', marginTop: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <header style={{ marginBottom: '3rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div>
-          <h1 style={{ fontSize: '2.25rem', fontWeight: 600, letterSpacing: '-0.02em' }}>
-            Overview
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
-            Recent active stories in your tenant
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+             <h1 style={{ fontSize: '3rem', fontWeight: 700, margin: 0, letterSpacing: '-0.02em', background: 'linear-gradient(to right, #fff, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+                Stories
+             </h1>
+             <span style={{ 
+               marginTop: '1.5rem', fontSize: '0.7rem', fontWeight: 800, padding: '3px 8px', 
+               borderRadius: '6px', background: 'rgba(139, 92, 246, 0.2)', color: '#a78bfa',
+               border: '1px solid rgba(139, 92, 246, 0.3)', letterSpacing: '0.1em'
+             }}>ALPHA v0.1.0</span>
+          </div>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '1.1rem', marginTop: '0.5rem' }}>
+            {teams.find(t => t.id === activeTeamId)?.isPersonal ? 'Your private automations' : `Collaborating in ${teams.find(t => t.id === activeTeamId)?.name}`}
           </p>
         </div>
-        <button onClick={() => fetchStories(true)} className="btn-glass" style={{ padding: '0.75rem 1rem', fontSize: '0.85rem' }}>
-          🔄 Refresh
-        </button>
+        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+            <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Select Workspace</span>
+            <select 
+              value={activeTeamId || ''} 
+              onChange={e => setActiveTeamId(Number(e.target.value))}
+              className="btn-glass"
+              style={{ padding: '0.5rem', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--glass-border)', color: 'white', borderRadius: '8px', minWidth: '180px' }}
+            >
+              <optgroup label="Personal Space">
+                {teams.filter(t => t.isPersonal).map(t => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </optgroup>
+              <optgroup label="Shared Teams">
+                {teams.filter(t => !t.isPersonal).map(t => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </optgroup>
+            </select>
+          </div>
+          <button onClick={() => fetchStories(true)} className="btn-glass" style={{ padding: '1.25rem 1rem', fontSize: '0.85rem' }}>
+            🔄 Refresh
+          </button>
+        </div>
       </header>
+
+      <ForensicLookup tenant={tenant} apiKey={apiKey} onOpenStory={onSelectStory} />
 
       {loading && (
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', opacity: 0.7 }}>
@@ -173,16 +255,29 @@ export default function Dashboard({ tenant, apiKey, onSelectStory }: DashboardPr
       {!loading && !error && (
         <>
           {/* Create Story Form */}
-          <div className="glass-panel" style={{ padding: '1rem 1.5rem', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', borderStyle: 'dashed' }}>
-             <h3 style={{ fontSize: '1rem', fontWeight: 600, flexShrink: 0 }}>New Story</h3>
-              <form onSubmit={handleCreateStory} style={{ display: 'flex', gap: '0.5rem', flex: 1 }}>
-               <input required value={newStoryName} onChange={e => setNewStoryName(e.target.value)} placeholder="e.g. Okta Alert Processing..." style={{ flex: 1 }} />
-               <button className="btn-primary" disabled={creatingStory} type="submit" style={{ padding: '0.75rem 1.5rem', flexShrink: 0 }}>
-                 {creatingStory ? 'Working...' : '+ Blank Story'}
-               </button>
-               <button type="button" onClick={handleScaffoldTemplate} disabled={creatingStory} className="btn-primary" style={{ padding: '0.75rem 1.5rem', background: 'var(--success-color)', flexShrink: 0 }}>
-                 {creatingStory ? 'Generatiing...' : '⚡ AI Template Workflow'}
-               </button>
+          <div className="glass-panel" style={{ padding: '1.5rem', marginBottom: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', borderStyle: 'dashed' }}>
+             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <span style={{ fontSize: '1.5rem' }}>{teams.find(t => t.id === activeTeamId)?.isPersonal ? '👤' : '👥'}</span>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: 600, margin: 0 }}>
+                  New Story in <span style={{ color: 'var(--accent-hover)' }}>{teams.find(t => t.id === activeTeamId)?.name || 'Loading...'}</span>
+                </h3>
+             </div>
+             
+              <form onSubmit={handleCreateStory} style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+               <input required value={newStoryName} onChange={e => setNewStoryName(e.target.value)} placeholder="e.g. Okta Alert Processing..." style={{ flex: 1, minWidth: '250px' }} />
+               <div style={{ display: 'flex', gap: '0.5rem' }}>
+                 <button className="btn-primary" disabled={creatingStory} type="submit" style={{ padding: '0.75rem 1.5rem', flexShrink: 0 }}>
+                   {creatingStory ? 'Working...' : '+ Blank Story'}
+                 </button>
+                 <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                    <button type="button" onClick={handleScaffoldTemplate} disabled={creatingStory} className="btn-primary" style={{ padding: '0.75rem 1.5rem', background: 'var(--success-color)', flexShrink: 0 }}>
+                      {creatingStory ? 'Scaffolding...' : '⚡ AI Template (SIEM Flow)'}
+                    </button>
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', position: 'absolute', top: '100%', left: 0, marginTop: '4px', width: 'max-content' }}>
+                      Creates Webhook → HTTP → Transform agents
+                    </span>
+                 </div>
+               </div>
              </form>
           </div>
 
@@ -215,7 +310,8 @@ export default function Dashboard({ tenant, apiKey, onSelectStory }: DashboardPr
                 cursor: 'pointer'
               }}>
               <div>
-                <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span>{teams.find(t => t.id === story.teamId)?.isPersonal ? '👤' : '👥'}</span>
                   {story.name || 'Untitled Story'}
                 </h3>
                   <span style={{ 
@@ -232,7 +328,7 @@ export default function Dashboard({ tenant, apiKey, onSelectStory }: DashboardPr
 
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.5rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                 <span>ID: {story.id}</span>
-                <span>Team: {story.teamId}</span>
+                <span style={{ color: 'var(--accent-hover)' }}>{teams.find(t => t.id === story.teamId)?.name || `Team ${story.teamId}`}</span>
               </div>
             </div>
           ))}

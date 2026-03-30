@@ -1,18 +1,24 @@
 {
   "name": "tines-desktop",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0-alpha",
+  "description": "Tines Desktop IDE for Security Automation",
+  "author": "Tines Team",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
-    "electron:start": "cross-env NODE_ENV=development electron .",
-    "start": "concurrently -k \"npm run dev\" \"wait-on tcp:5199 && npm run electron:start\"",
+    "electron:start": "cross-env NODE_ENV=development electron . --remote-debugging-port=${REMOTE_DEBUG_PORT:-9223} --remote-allow-origins=*",
+    "mcp:start": "electron-mcp-server",
+    "start": "concurrently -k \"npm run dev\" \"wait-on tcp:${VITE_PORT:-5199} && npm run electron:start\"",
     "build": "tsc -b && vite build",
+    "electron:build:win": "npm run build && electron-builder --win",
+    "electron:build:mac": "npm run build && electron-builder --mac",
     "lint": "eslint .",
     "preview": "vite preview"
   },
   "dependencies": {
+    "duckdb": "^1.4.4",
     "jspdf": "^4.2.1",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
@@ -20,6 +26,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
+    "@iflow-mcp/electron-mcp-server": "^1.5.0",
+    "@playwright/test": "^1.58.2",
     "@types/node": "^24.12.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
@@ -36,5 +44,44 @@
     "typescript-eslint": "^8.57.0",
     "vite": "^8.0.1",
     "wait-on": "^9.0.4"
+  },
+  "build": {
+    "appId": "com.tines.desktop",
+    "productName": "Tines Desktop",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": "x64"
+        },
+        {
+          "target": "nsis",
+          "arch": "arm64"
+        },
+        {
+          "target": "portable",
+          "arch": "x64"
+        },
+        {
+          "target": "portable",
+          "arch": "arm64"
+        }
+      ]
+    }
   }
 }
