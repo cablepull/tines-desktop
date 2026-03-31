@@ -1,0 +1,529 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tines Desktop</title>
+    <meta
+      name="description"
+      content="Tines Desktop is an unofficial open source Electron app for browsing, debugging, and investigating Tines stories."
+    />
+    <style>
+      :root {
+        --ink: #111111;
+        --paper: #f7f2e8;
+        --card: #fff9ef;
+        --yellow: #efe53a;
+        --mint: #b9f3cf;
+        --sky: #9fe0ff;
+        --peach: #ffc69a;
+        --lavender: #d8c5ff;
+        --line: #1f1f1f;
+        --muted: #4c4c4c;
+        --shadow: 0 14px 0 rgba(17, 17, 17, 0.08);
+        --radius-xl: 28px;
+        --radius-lg: 20px;
+        --radius-md: 14px;
+        --max: 1180px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Inter", "Segoe UI", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(239, 229, 58, 0.25), transparent 30%),
+          radial-gradient(circle at top right, rgba(159, 224, 255, 0.28), transparent 26%),
+          linear-gradient(180deg, #fff8ec 0%, var(--paper) 100%);
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .shell {
+        max-width: var(--max);
+        margin: 0 auto;
+        padding: 24px 20px 64px;
+      }
+
+      .topbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin-bottom: 24px;
+      }
+
+      .wordmark {
+        font-weight: 900;
+        letter-spacing: -0.04em;
+        font-size: clamp(1.5rem, 2vw, 2.2rem);
+      }
+
+      .nav {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .pill,
+      .link-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        border: 2px solid var(--line);
+        border-radius: 999px;
+        padding: 10px 16px;
+        text-decoration: none;
+        font-weight: 700;
+        background: rgba(255, 255, 255, 0.7);
+        box-shadow: 0 4px 0 rgba(17, 17, 17, 0.05);
+      }
+
+      .pill.alpha {
+        background: var(--yellow);
+      }
+
+      .pill.warning {
+        background: #fff;
+      }
+
+      .hero {
+        position: relative;
+        overflow: hidden;
+        border: 3px solid var(--line);
+        border-radius: 36px;
+        background:
+          linear-gradient(135deg, rgba(255,255,255,0.55), rgba(255,255,255,0.75)),
+          linear-gradient(135deg, var(--yellow), var(--mint) 45%, var(--sky));
+        padding: clamp(28px, 5vw, 56px);
+        box-shadow: var(--shadow);
+      }
+
+      .hero-grid {
+        display: grid;
+        grid-template-columns: 1.1fr 0.9fr;
+        gap: 28px;
+        align-items: center;
+      }
+
+      .hero-kicker {
+        font-size: 0.82rem;
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+        font-weight: 900;
+        margin-bottom: 12px;
+      }
+
+      .hero h1 {
+        margin: 0;
+        font-size: clamp(2.8rem, 7vw, 6rem);
+        line-height: 0.92;
+        letter-spacing: -0.06em;
+      }
+
+      .hero p {
+        margin: 18px 0 0;
+        max-width: 58ch;
+        font-size: clamp(1rem, 1.4vw, 1.18rem);
+        line-height: 1.65;
+      }
+
+      .hero-actions {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-top: 24px;
+      }
+
+      .cta-primary,
+      .cta-secondary {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 52px;
+        padding: 0 18px;
+        border-radius: 999px;
+        border: 2px solid var(--line);
+        text-decoration: none;
+        font-weight: 800;
+      }
+
+      .cta-primary {
+        background: var(--ink);
+        color: #fff;
+      }
+
+      .cta-secondary {
+        background: rgba(255,255,255,0.7);
+      }
+
+      .hero-card {
+        border: 3px solid var(--line);
+        border-radius: 24px;
+        background: rgba(255,255,255,0.82);
+        padding: 18px;
+        transform: rotate(-2deg);
+      }
+
+      .hero-card img {
+        display: block;
+        width: 100%;
+        height: auto;
+        border-radius: 16px;
+        border: 2px solid var(--line);
+      }
+
+      .hero-card figcaption {
+        margin-top: 12px;
+        font-size: 0.95rem;
+        line-height: 1.45;
+      }
+
+      .section {
+        margin-top: 34px;
+        border: 3px solid var(--line);
+        border-radius: var(--radius-xl);
+        background: var(--card);
+        padding: clamp(22px, 3vw, 34px);
+        box-shadow: var(--shadow);
+      }
+
+      .section h2 {
+        margin: 0 0 10px;
+        font-size: clamp(1.7rem, 3vw, 2.7rem);
+        letter-spacing: -0.04em;
+      }
+
+      .section > p {
+        margin: 0 0 18px;
+        line-height: 1.7;
+        color: var(--muted);
+        max-width: 72ch;
+      }
+
+      .feature-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .feature-card {
+        border: 2px solid var(--line);
+        border-radius: var(--radius-lg);
+        padding: 18px;
+        background: #fffdf6;
+      }
+
+      .feature-card:nth-child(1) { background: #fff7b8; }
+      .feature-card:nth-child(2) { background: #dff9e7; }
+      .feature-card:nth-child(3) { background: #dff2ff; }
+      .feature-card:nth-child(4) { background: #ffe1cb; }
+      .feature-card:nth-child(5) { background: #e8ddff; }
+      .feature-card:nth-child(6) { background: #fff3d9; }
+
+      .feature-card h3 {
+        margin: 0 0 8px;
+        font-size: 1.1rem;
+      }
+
+      .feature-card p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .gallery {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+      }
+
+      .shot {
+        background: #fff;
+        border: 2px solid var(--line);
+        border-radius: 22px;
+        overflow: hidden;
+      }
+
+      .shot img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+
+      .shot-body {
+        padding: 16px;
+      }
+
+      .shot-body h3 {
+        margin: 0 0 8px;
+        font-size: 1.15rem;
+      }
+
+      .shot-body p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.65;
+      }
+
+      .callout-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+
+      .callout {
+        border: 2px solid var(--line);
+        border-radius: 20px;
+        padding: 18px;
+      }
+
+      .callout strong {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 1rem;
+      }
+
+      .callout p,
+      .callout li {
+        color: var(--muted);
+        line-height: 1.65;
+      }
+
+      .callout ul {
+        margin: 10px 0 0;
+        padding-left: 18px;
+      }
+
+      .callout.warning {
+        background: #fff6df;
+      }
+
+      .callout.unofficial {
+        background: #ffe5dd;
+      }
+
+      .code-block {
+        background: #111;
+        color: #f5f5f5;
+        border-radius: 20px;
+        padding: 18px 20px;
+        overflow: auto;
+        border: 2px solid #000;
+      }
+
+      pre {
+        margin: 0;
+        font: 0.95rem/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      .footer {
+        margin-top: 28px;
+        padding: 12px 2px;
+        color: var(--muted);
+        font-size: 0.95rem;
+      }
+
+      @media (max-width: 980px) {
+        .hero-grid,
+        .feature-grid,
+        .gallery,
+        .callout-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .hero-card {
+          transform: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <div class="topbar">
+        <div class="wordmark">Tines Desktop</div>
+        <div class="nav">
+          <span class="pill alpha">ALPHA</span>
+          <span class="pill warning">Unofficial · not supported by Tines</span>
+          <a class="link-btn" href="./guides/app-user-guide.md">User Guide</a>
+          <a class="link-btn" href="https://github.com/cablepull/tines-desktop">GitHub</a>
+        </div>
+      </div>
+
+      <section class="hero">
+        <div class="hero-grid">
+          <div>
+            <div class="hero-kicker">Open source desktop companion for Tines</div>
+            <h1>Browse. Debug. Investigate.</h1>
+            <p>
+              Tines Desktop is an unofficial Electron app for exploring stories in a safer
+              read-only flow, tracing execution visually, looking up old incidents by Event ID
+              or Story Run GUID, and saving local investigations with screenshots and evidence.
+            </p>
+            <div class="hero-actions">
+              <a class="cta-primary" href="./guides/app-user-guide.md">Read the user guide</a>
+              <a class="cta-secondary" href="https://github.com/cablepull/tines-desktop">View source on GitHub</a>
+              <a class="cta-secondary" href="#quickstart">Quick start</a>
+            </div>
+          </div>
+          <figure class="hero-card">
+            <img src="./guides/assets/app-guide-04-story-canvas.png" alt="Tines Desktop story canvas" />
+            <figcaption>
+              The app is optimized for understanding story structure and operational state
+              without immediately dropping into mutation-capable editing.
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Why this project exists</h2>
+        <p>
+          Tines is powerful, but day-to-day operational work often needs a different shape than
+          the browser alone: safe inspection, focused debugging, incident-driven lookup, and a
+          way to preserve findings locally. Tines Desktop aims to make that workflow faster and
+          easier to reason about.
+        </p>
+        <div class="feature-grid">
+          <div class="feature-card">
+            <h3>Read-only story browsing</h3>
+            <p>Open stories in a browse-first canvas with local-only layout, zoom, search, and export tools.</p>
+          </div>
+          <div class="feature-card">
+            <h3>Forensic lookup</h3>
+            <p>Start from an Event ID or Story Run GUID and resolve story, action, run, and artifact context.</p>
+          </div>
+          <div class="feature-card">
+            <h3>Visual debug trace</h3>
+            <p>Inspect execution history and supported health signals across the story graph.</p>
+          </div>
+          <div class="feature-card">
+            <h3>Safety map</h3>
+            <p>Review blast radius, risky nodes, and where bad data may be re-emitted or propagated downstream.</p>
+          </div>
+          <div class="feature-card">
+            <h3>Investigations</h3>
+            <p>Save local investigative sessions with findings, screenshots, run context, and evidence artifacts.</p>
+          </div>
+          <div class="feature-card">
+            <h3>Separated editor</h3>
+            <p>Keep routine investigation safe while isolating mutation-capable behavior in a clearly marked editor surface.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Feature highlights</h2>
+        <p>
+          These are some of the strongest workflows in the current alpha. The visual language is
+          intentionally bold and operational: readable graphs, explicit risk cues, and a clear
+          separation between inspection and editing.
+        </p>
+        <div class="gallery">
+          <article class="shot">
+            <img src="./guides/assets/app-guide-03-forensic-lookup.png" alt="Forensic lookup screen" />
+            <div class="shot-body">
+              <h3>Forensic lookup</h3>
+              <p>Translate old incident references into story, run, action, and downloadable artifact context without manual Tines UI hunting.</p>
+            </div>
+          </article>
+          <article class="shot">
+            <img src="./guides/assets/app-guide-05-organize-chart.png" alt="Organize chart feature" />
+            <div class="shot-body">
+              <h3>Organize chart</h3>
+              <p>Use local auto-layout to make dense stories readable before debugging, exporting, or handoff.</p>
+            </div>
+          </article>
+          <article class="shot">
+            <img src="./guides/assets/app-guide-06-safety-map.png" alt="Safety map feature" />
+            <div class="shot-body">
+              <h3>Safety map</h3>
+              <p>Reason about operational risk, downstream impact, and where problematic inputs could turn into external side effects.</p>
+            </div>
+          </article>
+          <article class="shot">
+            <img src="./guides/assets/app-guide-07-debug-trace.png" alt="Debug trace feature" />
+            <div class="shot-body">
+              <h3>Debug trace</h3>
+              <p>Visualize run-scoped and all-runs execution state while keeping supported health signals visible on the graph.</p>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>What to know before using it</h2>
+        <div class="callout-grid">
+          <div class="callout unofficial">
+            <strong>Unofficial and unsupported</strong>
+            <p>
+              Tines Desktop is an open source side project and is not an official Tines product.
+              It is not supported by Tines. You should treat it as an alpha-quality companion app.
+            </p>
+          </div>
+          <div class="callout warning">
+            <strong>Editor warning</strong>
+            <p>
+              The editor surface exists, but it is not the strongest part of the product today.
+              The recommended workflow is still the read-only investigation path unless you
+              explicitly want to test editor behavior.
+            </p>
+          </div>
+          <div class="callout">
+            <strong>Connection profile security</strong>
+            <p>
+              Saved profiles use Electron <code>safeStorage</code> when the host OS supports it,
+              which is the normal expectation on macOS and Windows. Edge-case environments such
+              as stripped-down Linux systems are where that assumption is weaker.
+            </p>
+          </div>
+          <div class="callout">
+            <strong>Debugger API limitation</strong>
+            <p>
+              The app is good at reconstructing execution and supported health signals, but it
+              does not always get the exact action-log detail shown in the Tines web UI. Use the
+              desktop debugger as a strong operational view, not perfect browser parity.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="quickstart">
+        <h2>Quick start</h2>
+        <p>
+          To work on Tines Desktop locally, you currently need the sibling
+          <code>tines-sdk-js</code> repository next to this one because the app depends on it
+          through a local file reference.
+        </p>
+        <div class="code-block">
+<pre>tines-sdk/
+  tines-desktop/
+  tines-sdk-js/
+
+cd tines-desktop
+npm install
+npm run start</pre>
+        </div>
+        <p style="margin-top: 16px;">
+          Looking for a deeper walkthrough? Start with the
+          <a href="./guides/app-user-guide.md">full user guide</a>.
+        </p>
+      </section>
+
+      <div class="footer">
+        Built by the community, powered by Electron, DuckDB, React, and the Tines API.
+      </div>
+    </div>
+  </body>
+</html>

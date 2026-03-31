@@ -4,6 +4,7 @@ Tines Desktop is a local Electron application for investigating, browsing, and s
 
 **Navigation**
 
+- [Project Home](./index.html)
 - [User Guide](./guides/app-user-guide.md)
 - [Repository README](../README.md)
 - [Debugger RCA](./rca/16-debugger-log-parity-and-supported-health-signals.md)
