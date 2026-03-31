@@ -8,10 +8,11 @@ interface NodeInspectorProps {
   action: Action;
   tenant: string;
   apiKey: string;
+  readOnly?: boolean;
   onClose: () => void;
 }
 
-export default function NodeInspector({ action, tenant, apiKey, onClose }: NodeInspectorProps) {
+export default function NodeInspector({ action, tenant, apiKey, readOnly = false, onClose }: NodeInspectorProps) {
   const { addLog } = useLogger();
   const [running, setRunning] = useState(false);
   const [eventResult, setEventResult] = useState<any>(null);
@@ -201,11 +202,17 @@ export default function NodeInspector({ action, tenant, apiKey, onClose }: NodeI
         )}
       </div>
 
-      <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem' }}>
-        <button onClick={executeLiveRun} disabled={running} className="btn-primary" style={{ flex: 1, padding: '0.75rem', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem', background: running ? 'var(--bg-glass)' : 'var(--accent-color)' }}>
-          <span>▷</span> {running ? 'Executing...' : 'Execute Live Run'}
-        </button>
-      </div>
+      {!readOnly ? (
+        <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem' }}>
+          <button onClick={executeLiveRun} disabled={running} className="btn-primary" style={{ flex: 1, padding: '0.75rem', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem', background: running ? 'var(--bg-glass)' : 'var(--accent-color)' }}>
+            <span>▷</span> {running ? 'Executing...' : 'Execute Live Run'}
+          </button>
+        </div>
+      ) : (
+        <div style={{ marginTop: '1rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+          This inspector is read-only here. Open the story from `Editor` to run actions against the tenant.
+        </div>
+      )}
     </div>
   );
 }

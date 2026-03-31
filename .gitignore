@@ -11,6 +11,11 @@ node_modules
 dist
 dist-ssr
 release/
+tmp/
+playwright-report/
+test-results/
+blob-report/
+coverage/
 *.local
 
 # Environments & Secrets

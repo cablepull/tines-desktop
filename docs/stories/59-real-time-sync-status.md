@@ -4,7 +4,7 @@
 Advanced User
 
 ## Objective
-Gain visual confidence that canvas changes (drags, connections, deletes) are permanently saved to the remote tenant.
+Gain visual confidence that `Editor` canvas changes (drags, connections, deletes) are permanently saved to the remote tenant.
 
 ## Requirements
 - Implement a status indicator in the HUD:
@@ -16,3 +16,4 @@ Gain visual confidence that canvas changes (drags, connections, deletes) are per
 ## Acceptance Criteria
 - [ ] Indicator pulses whenever a node is moved.
 - [ ] Shows "Last Saved [Time]" after successful sync.
+- [ ] The read-only story browser does not imply that edits are possible from that surface.

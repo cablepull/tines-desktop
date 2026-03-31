@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useLogger } from '../context/LogContext';
 import type { LogLevel } from '../context/LogContext';
 
@@ -14,6 +14,10 @@ const LevelColors: Record<LogLevel, string> = {
 export default function LogConsole() {
   const { logs, isConsoleOpen, setConsoleOpen, clearLogs } = useLogger();
   const bottomRef = useRef<HTMLDivElement>(null);
+  const logCounts = useMemo(() => logs.reduce<Record<LogLevel, number>>((acc, log) => {
+    acc[log.level] += 1;
+    return acc;
+  }, { INFO: 0, NETWORK: 0, SUCCESS: 0, ERROR: 0, WARNING: 0, DEBUG: 0 }), [logs]);
 
   // Auto-scroll to bottom when new logs arrive
   useEffect(() => {
@@ -48,7 +52,24 @@ export default function LogConsole() {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
           <h3 style={{ fontSize: '0.9rem', fontWeight: 600, margin: 0, letterSpacing: '0.05em' }}>TERMINAL</h3>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{logs.length} Events</span>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{logs.length} Logs</span>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            {(['NETWORK', 'WARNING', 'ERROR', 'SUCCESS', 'DEBUG'] as LogLevel[]).map((level) => (
+              <span
+                key={level}
+                style={{
+                  fontSize: '0.7rem',
+                  color: LevelColors[level],
+                  background: 'rgba(255,255,255,0.04)',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                  borderRadius: '999px',
+                  padding: '2px 8px'
+                }}
+              >
+                {level}: {logCounts[level]}
+              </span>
+            ))}
+          </div>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <button className="btn-glass" style={{ padding: '0.25rem 0.75rem', fontSize: '0.75rem' }} onClick={clearLogs}>Clear</button>
@@ -67,7 +88,7 @@ export default function LogConsole() {
         fontSize: '0.85rem'
       }}>
         {logs.length === 0 && (
-          <div style={{ color: 'var(--text-secondary)', fontStyle: 'italic' }}>Waiting for events...</div>
+          <div style={{ color: 'var(--text-secondary)', fontStyle: 'italic' }}>Waiting for debugger and network logs...</div>
         )}
         {logs.map((log) => (
           <div key={log.id} style={{ display: 'flex', gap: '1rem', lineHeight: 1.4 }}>

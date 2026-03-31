@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   dbSaveLogs: (logs) => ipcRenderer.invoke('db-save-logs', logs),
   dbGetEvents: (args) => ipcRenderer.invoke('db-get-events', args),
   dbGetLogs: (args) => ipcRenderer.invoke('db-get-logs', args),
+  dbGetDebugSummary: (args) => ipcRenderer.invoke('db-get-debug-summary', args),
   dbSaveInvestigation: (investigation) => ipcRenderer.invoke('db-save-investigation', investigation),
   dbListInvestigations: (args) => ipcRenderer.invoke('db-list-investigations', args),
   dbGetInvestigation: (id) => ipcRenderer.invoke('db-get-investigation', id),

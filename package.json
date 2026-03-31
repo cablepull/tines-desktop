@@ -1,7 +1,7 @@
 {
   "name": "tines-desktop",
   "private": true,
-  "version": "0.1.0-alpha",
+  "version": "0.1.1-alpha",
   "description": "Tines Desktop IDE for Security Automation",
   "author": "Tines Team",
   "type": "module",

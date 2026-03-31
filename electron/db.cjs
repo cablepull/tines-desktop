@@ -211,6 +211,15 @@ async function saveEvents(events) {
 async function saveLogs(logs) {
   for (const log of logs) {
     try {
+      const derivedRunGuid =
+        log.story_run_guid ||
+        log.run_guid ||
+        log.execution_run_guid ||
+        log.inbound_event?.story_run_guid ||
+        log.inbound_event?.run_guid ||
+        log.inbound_event?.execution_run_guid ||
+        null;
+
       await run(`
         INSERT INTO logs (id, action_id, story_id, run_guid, level, message, created_at, payload_json)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -224,7 +233,7 @@ async function saveLogs(logs) {
         String(log.id),
         log.action_id,
         log.story_id,
-        log.story_run_guid || log.run_guid || log.execution_run_guid || null,
+        derivedRunGuid,
         log.level,
         log.message,
         log.created_at,
@@ -236,12 +245,20 @@ async function saveLogs(logs) {
   }
 }
 
-async function getEvents(storyId, actionId = null, limit = 100, offset = 0) {
+async function getEvents(storyId, actionId = null, limit = 100, offset = 0, runGuid = null, sinceIso = null) {
   let sql = 'SELECT * FROM events WHERE story_id = ?';
   let params = [storyId];
   if (actionId) {
     sql += ' AND action_id = ?';
     params.push(actionId);
+  }
+  if (runGuid) {
+    sql += ' AND run_guid = ?';
+    params.push(runGuid);
+  }
+  if (sinceIso) {
+    sql += ' AND created_at >= ?';
+    params.push(sinceIso);
   }
   sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
   params.push(limit, offset);
@@ -259,12 +276,20 @@ async function getEvents(storyId, actionId = null, limit = 100, offset = 0) {
   }));
 }
 
-async function getLogs(storyId, actionId = null, limit = 200, offset = 0) {
+async function getLogs(storyId, actionId = null, limit = 200, offset = 0, runGuid = null, sinceIso = null) {
   let sql = 'SELECT * FROM logs WHERE story_id = ?';
   let params = [storyId];
   if (actionId) {
     sql += ' AND action_id = ?';
     params.push(actionId);
+  }
+  if (runGuid) {
+    sql += ' AND run_guid = ?';
+    params.push(runGuid);
+  }
+  if (sinceIso) {
+    sql += ' AND created_at >= ?';
+    params.push(sinceIso);
   }
   sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
   params.push(limit, offset);
@@ -292,6 +317,21 @@ async function getLogs(storyId, actionId = null, limit = 200, offset = 0) {
       created_at: row.created_at
     };
   });
+}
+
+async function getDebugSummary(storyId, { runGuid = null, sinceIso = null } = {}) {
+  const [eventRows, logRows] = await Promise.all([
+    getEvents(storyId, null, 5000, 0, runGuid, sinceIso),
+    getLogs(storyId, null, 5000, 0, runGuid, sinceIso),
+  ]);
+
+  return {
+    story_id: storyId,
+    run_guid: runGuid,
+    since_iso: sinceIso,
+    events: eventRows,
+    logs: logRows,
+  };
 }
 
 async function saveInvestigation(investigation) {
@@ -381,6 +421,7 @@ module.exports = {
   saveLogs,
   getEvents,
   getLogs,
+  getDebugSummary,
   saveInvestigation,
   listInvestigations,
   getInvestigation,

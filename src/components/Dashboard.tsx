@@ -9,9 +9,21 @@ interface DashboardProps {
   tenant: string;
   apiKey: string;
   onSelectStory: (id: number, mode?: 'live' | 'test' | 'draft', draftId?: number, actionId?: number) => void;
+  allowMutations?: boolean;
+  showForensicLookup?: boolean;
+  title?: string;
+  subtitle?: string;
 }
 
-export default function Dashboard({ tenant, apiKey, onSelectStory }: DashboardProps) {
+export default function Dashboard({
+  tenant,
+  apiKey,
+  onSelectStory,
+  allowMutations = false,
+  showForensicLookup = true,
+  title = 'Stories',
+  subtitle,
+}: DashboardProps) {
   const [stories, setStories] = useState<Story[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -194,7 +206,7 @@ export default function Dashboard({ tenant, apiKey, onSelectStory }: DashboardPr
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
              <h1 style={{ fontSize: '3rem', fontWeight: 700, margin: 0, letterSpacing: '-0.02em', background: 'linear-gradient(to right, #fff, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-                Stories
+                {title}
              </h1>
              <span style={{ 
                marginTop: '1.5rem', fontSize: '0.7rem', fontWeight: 800, padding: '3px 8px', 
@@ -203,7 +215,7 @@ export default function Dashboard({ tenant, apiKey, onSelectStory }: DashboardPr
              }}>ALPHA v0.1.0</span>
           </div>
           <p style={{ color: 'var(--text-secondary)', fontSize: '1.1rem', marginTop: '0.5rem' }}>
-            {teams.find(t => t.id === activeTeamId)?.isPersonal ? 'Your private automations' : `Collaborating in ${teams.find(t => t.id === activeTeamId)?.name}`}
+            {subtitle || (teams.find(t => t.id === activeTeamId)?.isPersonal ? 'Your private automations' : `Collaborating in ${teams.find(t => t.id === activeTeamId)?.name}`)}
           </p>
         </div>
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
@@ -233,7 +245,16 @@ export default function Dashboard({ tenant, apiKey, onSelectStory }: DashboardPr
         </div>
       </header>
 
-      <ForensicLookup tenant={tenant} apiKey={apiKey} onOpenStory={onSelectStory} />
+      {!allowMutations && (
+        <div className="glass-panel" style={{ padding: '1rem 1.25rem', marginBottom: '1rem', borderColor: 'rgba(245, 158, 11, 0.25)', background: 'rgba(245, 158, 11, 0.06)' }}>
+          <div style={{ fontWeight: 700, color: '#fbbf24', fontSize: '0.85rem', marginBottom: '0.35rem' }}>READ-ONLY STORY BROWSER</div>
+          <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            Story creation and server mutations now live in the `Editor` section. This view is for browsing, debugging, and investigation only.
+          </div>
+        </div>
+      )}
+
+      {showForensicLookup && <ForensicLookup tenant={tenant} apiKey={apiKey} onOpenStory={onSelectStory} />}
 
       {loading && (
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', opacity: 0.7 }}>
@@ -254,7 +275,7 @@ export default function Dashboard({ tenant, apiKey, onSelectStory }: DashboardPr
 
       {!loading && !error && (
         <>
-          {/* Create Story Form */}
+          {allowMutations && (
           <div className="glass-panel" style={{ padding: '1.5rem', marginBottom: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', borderStyle: 'dashed' }}>
              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                 <span style={{ fontSize: '1.5rem' }}>{teams.find(t => t.id === activeTeamId)?.isPersonal ? '👤' : '👥'}</span>
@@ -280,6 +301,7 @@ export default function Dashboard({ tenant, apiKey, onSelectStory }: DashboardPr
                </div>
              </form>
           </div>
+          )}
 
           <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem' }}>
              <input 

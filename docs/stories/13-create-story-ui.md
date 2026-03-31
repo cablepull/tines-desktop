@@ -6,7 +6,7 @@
 **So that** I don't have to leave the desktop application to spin up a new automation workspace.
 
 ## Acceptance Criteria
-- [ ] Implement a visually distinct "Create New Story" card or button on the Dashboard.
+- [ ] Implement a visually distinct "Create New Story" card or button in the `Editor` section, not the read-only Dashboard.
 - [ ] Add a small inline form or modal to capture the `name` and optional `description` of the new Story.
 - [ ] Utilize the `StoriesApi.createStory` from the SDK to generate the story in Tines.
-- [ ] Successfully refresh the Dashboard grid and display the new Story.
+- [ ] Successfully refresh the Editor story grid and display the new Story.

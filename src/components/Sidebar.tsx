@@ -2,6 +2,8 @@ interface SidebarProps {
   tenant: string;
   onLogout: () => void;
   onNavDashboard: () => void;
+  onNavEditor: () => void;
+  onNavInvestigations: () => void;
   onNavActions: () => void;
   onNavSettings: () => void;
   activePage: string;
@@ -11,13 +13,17 @@ interface SidebarProps {
 
 const NAV_ITEMS = [
   { key: 'dashboard', label: 'Dashboard', icon: 'D' },
+  { key: 'editor',   label: 'Editor',    icon: 'E' },
+  { key: 'investigations', label: 'Investigations', icon: 'I' },
   { key: 'actions',   label: 'Actions',   icon: 'A' },
   { key: 'settings',  label: 'Settings',  icon: 'S' },
 ];
 
-export default function Sidebar({ tenant, onLogout, onNavDashboard, onNavActions, onNavSettings, activePage, collapsed, onToggleCollapse }: SidebarProps) {
+export default function Sidebar({ tenant, onLogout, onNavDashboard, onNavEditor, onNavInvestigations, onNavActions, onNavSettings, activePage, collapsed, onToggleCollapse }: SidebarProps) {
   const handlers: Record<string, () => void> = {
     dashboard: onNavDashboard,
+    editor: onNavEditor,
+    investigations: onNavInvestigations,
     actions: onNavActions,
     settings: onNavSettings,
   };

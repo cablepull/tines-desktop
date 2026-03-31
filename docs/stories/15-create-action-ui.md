@@ -6,7 +6,8 @@
 **So that** I can rapidly scaffold logic blocks (like Webhooks, HTTP Requests) natively.
 
 ## Acceptance Criteria
-- [ ] Inside the `StoryView` component, add a "Create Action" module.
+- [ ] Inside the editable `StoryView` opened from `Editor`, add a "Create Action" module.
 - [ ] Provide inputs for Action Name, Type (e.g. `Webhook`, `Event Transformation`), and a raw JSON text area for Configuration Options.
 - [ ] Dispatch to `ActionsApi.createAction(storyId, ...)` via the SDK.
 - [ ] Refresh the Story's action list to visibly confirm creation.
+- [ ] The browse-only story canvas does not expose this mutation control.

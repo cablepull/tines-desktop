@@ -6,6 +6,7 @@
 **So that** I can instantly destroy incorrect connections or legacy Logic agents without navigating back into the Cloud UI.
 
 ## Acceptance Criteria
-- [ ] Render a sleek `✖` icon upon mouse hover over logic cards.
+- [ ] Render a sleek `✖` icon upon mouse hover over logic cards in the `Editor` canvas only.
 - [ ] Trigger the native `ActionsApi.deleteAction({ id })` HTTP deletion interface locally.
 - [ ] Execute `fetchActions()` upon network completion to visually snap the deleted node out of existence and instantly re-render SVG Beziers.
+- [ ] The read-only story browser does not expose delete affordances.

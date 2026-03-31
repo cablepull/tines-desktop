@@ -1,13 +1,78 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { classifyActionLiveSignal, classifyEventSignal, classifyLogSignal } from '../utils/debugEvidence';
 
 interface StoryLedgerProps {
   storyId: number;
   actions: any[];
+  refreshVersion?: number;
   onFlyToNode: (id: number) => void;
   onClose: () => void;
 }
 
-const StoryLedger: React.FC<StoryLedgerProps> = ({ storyId, actions, onFlyToNode, onClose }) => {
+type LedgerImpact = 'blocked' | 'external' | 'warning' | 'ok' | 'unknown';
+
+const classifyImpact = (item: any, action?: any): { level: LedgerImpact; label: string; detail: string } => {
+  if (item._type === 'LOG') {
+    const signal = classifyLogSignal(item);
+    if (signal === 'blocked') {
+      return { level: 'blocked', label: 'Flow-blocking', detail: 'Action log indicates a local runtime failure or hard stop in this execution path.' };
+    }
+    if (signal === 'external') {
+      return { level: 'external', label: 'External issue', detail: 'Action log indicates a downstream HTTP or remote-system failure.' };
+    }
+    if (signal === 'warning') {
+      return { level: 'warning', label: 'Advisory', detail: 'Warning log indicates attention needed without confirmed flow break.' };
+    }
+    const actionSignal = classifyActionLiveSignal(action);
+    if (actionSignal === 'blocked') {
+      return { level: 'blocked', label: 'Action unhealthy', detail: 'The log is informational, but Tines currently reports this action as not working.' };
+    }
+    if (actionSignal === 'warning') {
+      return { level: 'warning', label: 'Action warning', detail: 'The log is informational, but the action has recent warning/error activity or backlog in live activity.' };
+    }
+    return { level: 'ok', label: 'Informational', detail: 'Informational log only.' };
+  }
+
+  const signal = classifyEventSignal(item);
+  if (signal === 'blocked') {
+    return { level: 'blocked', label: 'Flow-blocking', detail: 'This event explicitly failed and likely broke the run path.' };
+  }
+  if (signal === 'external') {
+    return { level: 'external', label: 'External issue', detail: 'This event points to an HTTP or downstream dependency issue rather than a guaranteed local flow break.' };
+  }
+  if (signal === 'warning') {
+    return { level: 'warning', label: 'Advisory', detail: 'This event was marked as a warning without a hard failure.' };
+  }
+  const actionSignal = classifyActionLiveSignal(action);
+  if (actionSignal === 'blocked') {
+    return { level: 'blocked', label: 'Action unhealthy', detail: 'This event executed, but Tines currently reports the action as not working.' };
+  }
+  if (actionSignal === 'warning') {
+    return { level: 'warning', label: 'Action warning', detail: 'This event executed, but the action has recent warning/error activity or backlog in live activity.' };
+  }
+  if (signal === 'ok' || signal === 'none') {
+    return { level: 'ok', label: 'Observed execution', detail: 'This record shows execution activity. Supported APIs do not expose a stronger failure signal on this row.' };
+  }
+
+  return { level: 'unknown', label: 'Unknown', detail: 'The record does not expose enough information to classify impact confidently.' };
+};
+
+const impactStyle = (level: LedgerImpact) => {
+  switch (level) {
+    case 'blocked':
+      return { color: '#ef4444', bg: 'rgba(239,68,68,0.14)', icon: '⛔' };
+    case 'external':
+      return { color: '#f97316', bg: 'rgba(249,115,22,0.14)', icon: '🌐' };
+    case 'warning':
+      return { color: '#f59e0b', bg: 'rgba(245,158,11,0.14)', icon: '⚠️' };
+    case 'ok':
+      return { color: '#22c55e', bg: 'rgba(34,197,94,0.14)', icon: '✅' };
+    default:
+      return { color: '#94a3b8', bg: 'rgba(148,163,184,0.14)', icon: '❔' };
+  }
+};
+
+const StoryLedger: React.FC<StoryLedgerProps> = ({ storyId, actions, refreshVersion = 0, onFlyToNode, onClose }) => {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
@@ -51,8 +116,10 @@ const StoryLedger: React.FC<StoryLedgerProps> = ({ storyId, actions, onFlyToNode
   }, [storyId]);
 
   useEffect(() => {
+    setOffset(0);
+    setHasMore(true);
     fetchData(0, true);
-  }, [fetchData]);
+  }, [fetchData, refreshVersion]);
 
   const handleLoadMore = () => {
     const nextOffset = offset + PAGE_SIZE;
@@ -189,12 +256,17 @@ const StoryLedger: React.FC<StoryLedgerProps> = ({ storyId, actions, onFlyToNode
                   <th style={{ textAlign: 'left', padding: '0.75rem', borderBottom: '2px solid var(--glass-border)' }}>TYPE</th>
                   <th style={{ textAlign: 'left', padding: '0.75rem', borderBottom: '2px solid var(--glass-border)' }}>ACTION</th>
                   <th style={{ textAlign: 'left', padding: '0.75rem', borderBottom: '2px solid var(--glass-border)' }}>RUN GUID</th>
+                  <th style={{ textAlign: 'left', padding: '0.75rem', borderBottom: '2px solid var(--glass-border)' }}>IMPACT</th>
                   <th style={{ textAlign: 'left', padding: '0.75rem', borderBottom: '2px solid var(--glass-border)' }}>STATUS</th>
                   <th style={{ textAlign: 'left', padding: '0.75rem', borderBottom: '2px solid var(--glass-border)' }}>ID</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredData.map((item, idx) => (
+                {filteredData.map((item, idx) => {
+                  const action = actions.find(a => a.id === Number(item.action_id || item.agent_id));
+                  const impact = classifyImpact(item, action);
+                  const impactBadge = impactStyle(impact.level);
+                  return (
                   <tr 
                     key={idx} 
                     onClick={() => setSelectedItem(item)}
@@ -216,6 +288,26 @@ const StoryLedger: React.FC<StoryLedgerProps> = ({ storyId, actions, onFlyToNode
                       {item.run_guid || item.story_run_guid || 'N/A'}
                     </td>
                     <td style={{ padding: '0.75rem' }}>
+                      <span
+                        title={impact.detail}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.35rem',
+                          padding: '2px 8px',
+                          borderRadius: '999px',
+                          fontSize: '0.7rem',
+                          fontWeight: 700,
+                          background: impactBadge.bg,
+                          color: impactBadge.color,
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        <span>{impactBadge.icon}</span>
+                        <span>{impact.label}</span>
+                      </span>
+                    </td>
+                    <td style={{ padding: '0.75rem' }}>
                       <span style={{ 
                         color: item.status === 'failed' || item.level === 'error' ? 'var(--danger-color)' : 
                                item.status === 'success' ? 'var(--success-color)' : 'var(--text-secondary)'
@@ -228,7 +320,7 @@ const StoryLedger: React.FC<StoryLedgerProps> = ({ storyId, actions, onFlyToNode
                       {item.id}
                     </td>
                   </tr>
-                ))}
+                )})}
               </tbody>
             </table>
             
@@ -250,6 +342,17 @@ const StoryLedger: React.FC<StoryLedgerProps> = ({ storyId, actions, onFlyToNode
         {/* Details Inspector */}
         {selectedItem && (
           <div style={{ width: '450px', borderLeft: '1px solid var(--glass-border)', padding: '1rem', overflowY: 'auto', background: 'rgba(0,0,0,0.2)', position: 'relative' }}>
+            {(() => {
+              const action = actions.find(a => a.id === Number(selectedItem.action_id || selectedItem.agent_id));
+              const impact = classifyImpact(selectedItem, action);
+              const badge = impactStyle(impact.level);
+              return (
+                <div style={{ marginBottom: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '0.45rem', padding: '6px 10px', borderRadius: '999px', background: badge.bg, color: badge.color, fontSize: '0.75rem', fontWeight: 700 }}>
+                  <span>{badge.icon}</span>
+                  <span>{impact.label}</span>
+                </div>
+              );
+            })()}
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
               <h4 style={{ margin: 0, color: 'var(--accent-color)' }}>FORENSIC INSPECTOR</h4>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -297,6 +400,16 @@ const StoryLedger: React.FC<StoryLedgerProps> = ({ storyId, actions, onFlyToNode
                 <div style={{ fontSize: '0.7rem', opacity: 0.5, textTransform: 'uppercase' }}>Action Name</div>
                 <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>{getActionName(selectedItem.action_id || selectedItem.agent_id)}</div>
                 <div style={{ fontSize: '0.7rem', opacity: 0.4 }}>ID: {selectedItem.action_id || selectedItem.agent_id}</div>
+              </div>
+
+              <div>
+                <div style={{ fontSize: '0.7rem', opacity: 0.5, textTransform: 'uppercase' }}>Impact Classification</div>
+                <div style={{ fontSize: '0.85rem', color: impactStyle(classifyImpact(selectedItem).level).color }}>
+                  {classifyImpact(selectedItem, actions.find(a => a.id === Number(selectedItem.action_id || selectedItem.agent_id))).label}
+                </div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '0.2rem', lineHeight: 1.4 }}>
+                  {classifyImpact(selectedItem, actions.find(a => a.id === Number(selectedItem.action_id || selectedItem.agent_id))).detail}
+                </div>
               </div>
             </div>
 

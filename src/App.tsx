@@ -2,13 +2,16 @@ import { useState, useEffect } from 'react';
 import Login from './components/Login';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
+import EditorPage from './components/EditorPage';
+import InvestigationsPage from './components/InvestigationsPage';
 import StoryView from './components/StoryView';
 import ActionsPage from './components/ActionsPage';
 import SettingsPage from './components/SettingsPage';
 import { LogProvider, useLogger } from './context/LogContext';
 import LogConsole from './components/LogConsole';
+import type { InvestigationRecord } from './electron';
 
-type NavPage = 'dashboard' | 'actions' | 'settings';
+type NavPage = 'dashboard' | 'editor' | 'investigations' | 'actions' | 'settings';
 
 function AppContent() {
   const [tenant, setTenant] = useState<string | null>(null);
@@ -16,6 +19,7 @@ function AppContent() {
   const [storyContext, setStoryContext] = useState<{ storyId: number, mode: 'live' | 'test' | 'draft', draftId?: number } | null>(null);
   const [navPage, setNavPage] = useState<NavPage>('dashboard');
   const [focusActionId, setFocusActionId] = useState<number | null>(null);
+  const [pendingInvestigation, setPendingInvestigation] = useState<InvestigationRecord | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const { setConsoleOpen, addLog } = useLogger();
 
@@ -38,11 +42,24 @@ function AppContent() {
   };
 
   const handleNavDashboard = () => { setNavPage('dashboard'); setStoryContext(null); setFocusActionId(null); };
+  const handleNavEditor = () => { setNavPage('editor'); setStoryContext(null); setFocusActionId(null); };
+  const handleNavInvestigations = () => { setNavPage('investigations'); setStoryContext(null); setFocusActionId(null); };
   const handleSelectStory = (id: number, mode: 'live' | 'test' | 'draft' = 'live', draftId?: number, actionId?: number) => { 
-    setNavPage('dashboard'); 
     setStoryContext({ storyId: id, mode, draftId }); 
     if (actionId) setFocusActionId(actionId);
     else setFocusActionId(null);
+  };
+  const handleOpenInvestigation = (investigation: InvestigationRecord) => {
+    setPendingInvestigation(investigation);
+    setNavPage('investigations');
+    setStoryContext({ storyId: investigation.story_id, mode: investigation.mode || 'live', draftId: investigation.draft_id });
+    setFocusActionId(investigation.debug_action_id || null);
+  };
+
+  const handleStoryBack = () => {
+    if (navPage === 'editor') handleNavEditor();
+    else if (navPage === 'actions') { setNavPage('actions'); setStoryContext(null); setFocusActionId(null); }
+    else handleNavDashboard();
   };
 
   return (
@@ -56,6 +73,8 @@ function AppContent() {
             <Sidebar 
             onLogout={handleLogout} 
             onNavDashboard={handleNavDashboard} 
+            onNavEditor={handleNavEditor}
+            onNavInvestigations={handleNavInvestigations}
             onNavActions={() => { setNavPage('actions'); setStoryContext(null); }}
             onNavSettings={() => { setNavPage('settings'); setStoryContext(null); }}
             activePage={navPage}
@@ -69,8 +88,16 @@ function AppContent() {
               apiKey={apiKey} 
               storyContext={storyContext} 
               focusActionId={focusActionId} 
-              onBack={handleNavDashboard} 
+              investigationToLoad={pendingInvestigation}
+              onInvestigationLoaded={() => setPendingInvestigation(null)}
+              editable={navPage === 'editor'}
+              onOpenInEditor={() => setNavPage('editor')}
+              onBack={handleStoryBack} 
             />
+          ) : navPage === 'editor' ? (
+            <EditorPage tenant={tenant} apiKey={apiKey} onSelectStory={handleSelectStory} />
+          ) : navPage === 'investigations' ? (
+            <InvestigationsPage onOpenInvestigation={handleOpenInvestigation} />
           ) : navPage === 'actions' ? (
             <ActionsPage tenant={tenant} apiKey={apiKey} onSelectStory={handleSelectStory} />
           ) : navPage === 'settings' ? (

@@ -18,8 +18,9 @@ app.whenReady().then(async () => {
 
 ipcMain.handle('db-save-events', (event, events) => db.saveEvents(events));
 ipcMain.handle('db-save-logs', (event, logs) => db.saveLogs(logs));
-ipcMain.handle('db-get-events', (event, { storyId, actionId, limit, offset }) => db.getEvents(storyId, actionId, limit, offset));
-ipcMain.handle('db-get-logs', (event, { storyId, actionId, limit, offset }) => db.getLogs(storyId, actionId, limit, offset));
+ipcMain.handle('db-get-events', (event, { storyId, actionId, limit, offset, runGuid, sinceIso }) => db.getEvents(storyId, actionId, limit, offset, runGuid, sinceIso));
+ipcMain.handle('db-get-logs', (event, { storyId, actionId, limit, offset, runGuid, sinceIso }) => db.getLogs(storyId, actionId, limit, offset, runGuid, sinceIso));
+ipcMain.handle('db-get-debug-summary', (event, { storyId, runGuid, sinceIso }) => db.getDebugSummary(storyId, { runGuid, sinceIso }));
 ipcMain.handle('db-save-investigation', (event, investigation) => db.saveInvestigation(investigation));
 ipcMain.handle('db-list-investigations', (event, args) => db.listInvestigations(args));
 ipcMain.handle('db-get-investigation', (event, id) => db.getInvestigation(id));

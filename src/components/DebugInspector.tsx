@@ -18,6 +18,7 @@ interface DebugInspectorProps {
   action: any;
   events: TinesEvent[];
   logs: any[];
+  readOnly?: boolean;
   onClose: () => void;
   onRefresh: () => void;
   onHoverEvent?: (id: string | null) => void;
@@ -46,7 +47,7 @@ const STATUS_STYLES: Record<string, { icon: string; color: string; label: string
 };
 
 export default function DebugInspector({ 
-  action, events, logs, onClose, onRefresh, onHoverEvent, onNavigateToEvent, highlightEventId, tenant, apiKey 
+  action, events, logs, readOnly = false, onClose, onRefresh, onHoverEvent, onNavigateToEvent, highlightEventId, tenant, apiKey 
 }: DebugInspectorProps) {
   const [activeTab, setActiveTab] = useState<'events' | 'diagnosis' | 'logs'>('events');
   const [expandedEventId, setExpandedEventId] = useState<number | null>(highlightEventId || null);
@@ -106,15 +107,17 @@ export default function DebugInspector({
           </div>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <button
-            className="btn-glass"
-            onClick={handleDryRun}
-            disabled={isDryRunning}
-            style={{ padding: '4px 8px', fontSize: '0.8rem', color: '#60a5fa' }}
-            title="Dry Run Action"
-          >
-            {isDryRunning ? '⏳' : '⚡'}
-          </button>
+          {!readOnly && (
+            <button
+              className="btn-glass"
+              onClick={handleDryRun}
+              disabled={isDryRunning}
+              style={{ padding: '4px 8px', fontSize: '0.8rem', color: '#60a5fa' }}
+              title="Dry Run Action"
+            >
+              {isDryRunning ? '⏳' : '⚡'}
+            </button>
+          )}
           <button
             className="btn-glass"
             onClick={onRefresh}
@@ -218,6 +221,11 @@ export default function DebugInspector({
           <>
             <div style={{ background: 'rgba(236,72,153,0.1)', border: '1px solid rgba(236,72,153,0.3)', borderRadius: '8px', padding: '1rem', marginBottom: '1.5rem' }}>
               <div style={{ fontSize: '0.65rem', color: '#ec4899', fontWeight: 700, marginBottom: '0.5rem' }}>AUTOMATED RCA [G2]</div>
+              {readOnly && (
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>
+                  Dry runs are disabled in the read-only story browser. Open this story from `Editor` to test nodes.
+                </div>
+              )}
               <div style={{ fontSize: '0.85rem', color: 'white', fontWeight: 600, lineHeight: 1.4 }}>
                 {(() => {
                   const systemErr = logs.find(l => l.level === 4);
