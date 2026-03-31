@@ -74,6 +74,7 @@
         display: flex;
         gap: 10px;
         flex-wrap: wrap;
+        align-items: center;
       }
 
       .pill,
@@ -94,8 +95,62 @@
         background: var(--yellow);
       }
 
+      .alpha-banner {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 16px;
+        border: 2px solid var(--line);
+        border-radius: 999px;
+        background: #111;
+        color: #fff;
+        font-weight: 900;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        box-shadow: 0 4px 0 rgba(17, 17, 17, 0.14);
+      }
+
+      .alpha-banner::before {
+        content: "";
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: var(--yellow);
+        box-shadow: 0 0 0 3px rgba(239, 229, 58, 0.22);
+      }
+
+      .alpha-note {
+        font-size: 0.8rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        opacity: 0.78;
+      }
+
       .pill.warning {
         background: #fff;
+      }
+
+      .status-note {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 800;
+        font-size: 0.95rem;
+        color: var(--muted);
+        padding: 4px 2px;
+      }
+
+      .status-note strong {
+        color: var(--ink);
+      }
+
+      .status-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 999px;
+        background: #ff8d4d;
+        box-shadow: 0 0 0 3px rgba(255, 141, 77, 0.16);
+        flex: 0 0 auto;
       }
 
       .hero {
@@ -354,9 +409,9 @@
       <div class="topbar">
         <div class="wordmark">Tines Desktop</div>
         <div class="nav">
-          <span class="pill alpha">ALPHA</span>
-          <span class="pill warning">Unofficial · not supported by Tines</span>
-          <a class="link-btn" href="./guides/app-user-guide.md">User Guide</a>
+          <span class="alpha-banner">Alpha <span class="alpha-note">v0.1.1-alpha</span></span>
+          <span class="status-note"><span class="status-dot" aria-hidden="true"></span><strong>Unofficial project.</strong> Not supported by Tines.</span>
+          <a class="link-btn" href="https://github.com/cablepull/tines-desktop/blob/master/docs/guides/app-user-guide.md">User Guide</a>
           <a class="link-btn" href="https://github.com/cablepull/tines-desktop">GitHub</a>
         </div>
       </div>
@@ -372,7 +427,7 @@
               or Story Run GUID, and saving local investigations with screenshots and evidence.
             </p>
             <div class="hero-actions">
-              <a class="cta-primary" href="./guides/app-user-guide.md">Read the user guide</a>
+              <a class="cta-primary" href="https://github.com/cablepull/tines-desktop/blob/master/docs/guides/app-user-guide.md">Read the user guide</a>
               <a class="cta-secondary" href="https://github.com/cablepull/tines-desktop">View source on GitHub</a>
               <a class="cta-secondary" href="#quickstart">Quick start</a>
             </div>
@@ -517,7 +572,7 @@ npm run start</pre>
         </div>
         <p style="margin-top: 16px;">
           Looking for a deeper walkthrough? Start with the
-          <a href="./guides/app-user-guide.md">full user guide</a>.
+          <a href="https://github.com/cablepull/tines-desktop/blob/master/docs/guides/app-user-guide.md">full user guide</a>.
         </p>
       </section>
 
