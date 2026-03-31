@@ -239,6 +239,20 @@
         border: 2px solid var(--line);
       }
 
+      .image-link {
+        display: block;
+        text-decoration: none;
+      }
+
+      .image-link img {
+        transition: transform 120ms ease, box-shadow 120ms ease;
+      }
+
+      .image-link:hover img {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 0 rgba(17, 17, 17, 0.08);
+      }
+
       .hero-card figcaption {
         margin-top: 12px;
         font-size: 0.95rem;
@@ -433,7 +447,9 @@
             </div>
           </div>
           <figure class="hero-card">
-            <img src="./guides/assets/app-guide-04-story-canvas.png" alt="Tines Desktop story canvas" />
+            <a class="image-link" href="./guides/assets/app-guide-04-story-canvas.png">
+              <img src="./guides/assets/app-guide-04-story-canvas.png" alt="Tines Desktop story canvas" />
+            </a>
             <figcaption>
               The app is optimized for understanding story structure and operational state
               without immediately dropping into mutation-capable editing.
@@ -487,28 +503,36 @@
         </p>
         <div class="gallery">
           <article class="shot">
-            <img src="./guides/assets/app-guide-03-forensic-lookup.png" alt="Forensic lookup screen" />
+            <a class="image-link" href="./guides/assets/app-guide-03-forensic-lookup.png">
+              <img src="./guides/assets/app-guide-03-forensic-lookup.png" alt="Forensic lookup screen" />
+            </a>
             <div class="shot-body">
               <h3>Forensic lookup</h3>
               <p>Translate old incident references into story, run, action, and downloadable artifact context without manual Tines UI hunting.</p>
             </div>
           </article>
           <article class="shot">
-            <img src="./guides/assets/app-guide-05-organize-chart.png" alt="Organize chart feature" />
+            <a class="image-link" href="./guides/assets/app-guide-05-organize-chart.png">
+              <img src="./guides/assets/app-guide-05-organize-chart.png" alt="Organize chart feature" />
+            </a>
             <div class="shot-body">
               <h3>Organize chart</h3>
               <p>Use local auto-layout to make dense stories readable before debugging, exporting, or handoff.</p>
             </div>
           </article>
           <article class="shot">
-            <img src="./guides/assets/app-guide-06-safety-map.png" alt="Safety map feature" />
+            <a class="image-link" href="./guides/assets/app-guide-06-safety-map.png">
+              <img src="./guides/assets/app-guide-06-safety-map.png" alt="Safety map feature" />
+            </a>
             <div class="shot-body">
               <h3>Safety map</h3>
               <p>Reason about operational risk, downstream impact, and where problematic inputs could turn into external side effects.</p>
             </div>
           </article>
           <article class="shot">
-            <img src="./guides/assets/app-guide-07-debug-trace.png" alt="Debug trace feature" />
+            <a class="image-link" href="./guides/assets/app-guide-07-debug-trace.png">
+              <img src="./guides/assets/app-guide-07-debug-trace.png" alt="Debug trace feature" />
+            </a>
             <div class="shot-body">
               <h3>Debug trace</h3>
               <p>Visualize run-scoped and all-runs execution state while keeping supported health signals visible on the graph.</p>
