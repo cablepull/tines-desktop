@@ -1,12 +1,12 @@
-# Tines Desktop
+# Tines Desktop Docs
 
 Tines Desktop is a local Electron application for investigating, browsing, and selectively editing Tines stories.
 
 **Navigation**
 
-- [User Guide](./docs/guides/app-user-guide.md)
-- [Docs Index](./docs/README.md)
-- [Debugger RCA](./docs/rca/16-debugger-log-parity-and-supported-health-signals.md)
+- [User Guide](./guides/app-user-guide.md)
+- [Repository README](../README.md)
+- [Debugger RCA](./rca/16-debugger-log-parity-and-supported-health-signals.md)
 
 It is designed to be a safer operational companion to the Tines web UI, with a strong emphasis on:
 
@@ -98,7 +98,7 @@ This means:
 
 See:
 
-- [RCA 16](./docs/rca/16-debugger-log-parity-and-supported-health-signals.md)
+- [RCA 16](./rca/16-debugger-log-parity-and-supported-health-signals.md)
 
 ### Connection profile encryption caveat
 
@@ -174,7 +174,7 @@ Typical local flow:
 
 The main end-user walkthrough is:
 
-- [App User Guide](./docs/guides/app-user-guide.md)
+- [App User Guide](./guides/app-user-guide.md)
 
 That guide includes:
 
